@@ -7,10 +7,7 @@ const uploadsDir = path.join(__dirname, '../uploads');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const sessionDir = path.join(uploadsDir, uuidv4());
-    fs.mkdirSync(sessionDir, { recursive: true });
-    req.sessionDir = sessionDir;
-    cb(null, sessionDir);
+    cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
     const safeName = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
@@ -25,8 +22,7 @@ const fileFilter = (req, file, cb) => {
     'image/jpg',
     'image/png',
     'image/webp',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/msword'
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   ];
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);

@@ -8,64 +8,99 @@ const upload = require('../middleware/upload');
 const { optionalAuth } = require('../middleware/auth');
 const History = require('../models/History');
 const mammoth = require('mammoth');
+const pdfParse = require('pdf-parse');
+const sharp = require('sharp');
 
 const outputDir = path.join(__dirname, '../outputs');
 
 // Helper: get PDF bytes from file (auto-converts images to PDF)
 async function getPdfBytes(file) {
-  const bytes = fs.readFileSync(file.path);
+  let bytes = fs.readFileSync(file.path);
   
   if (file.mimetype === 'application/pdf' || file.originalname.toLowerCase().endsWith('.pdf')) {
     return bytes;
   }
   
-  if (file.mimetype.startsWith('image/') || file.originalname.match(/\.(jpg|jpeg|png)$/i)) {
+  // Handle images (including WebP, HEIC etc. via sharp)
+  if (file.mimetype.startsWith('image/') || file.originalname.match(/\.(jpg|jpeg|png|webp|gif|bmp)$/i)) {
     const pdfDoc = await PDFDocument.create();
-    let img;
-    if (file.mimetype === 'image/png' || file.originalname.toLowerCase().endsWith('.png')) {
-      img = await pdfDoc.embedPng(bytes);
+    
+    // Process image with sharp to ensure compatibility and normalize orientation
+    const imageProcessor = sharp(bytes);
+    const metadata = await imageProcessor.metadata();
+    
+    // Convert to PNG for max compatibility if not JPEG
+    let processedBytes;
+    let isPng = true;
+    
+    if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
+      processedBytes = await imageProcessor.jpeg({ quality: 90 }).toBuffer();
+      isPng = false;
     } else {
-      img = await pdfDoc.embedJpg(bytes);
+      processedBytes = await imageProcessor.png().toBuffer();
     }
+    
+    const img = isPng ? await pdfDoc.embedPng(processedBytes) : await pdfDoc.embedJpg(processedBytes);
     const page = pdfDoc.addPage([img.width, img.height]);
     page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
     return await pdfDoc.save();
   }
   
+  // Handle Word Documents
   if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.originalname.toLowerCase().endsWith('.docx')) {
-    const { value } = await mammoth.convertToHtml({ path: file.path });
+    const { value } = await mammoth.extractRawText({ path: file.path });
     const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage();
-    const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
     
-    // basic text wrapping for docx content
-    const text = value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
     const fontSize = 11;
     const margin = 50;
+    const lineHeight = fontSize * 1.4;
+    
+    let page = pdfDoc.addPage();
+    let { width, height } = page.getSize();
+    let y = height - margin;
     const maxWidth = width - (margin * 2);
     
-    let y = height - margin;
-    const lines = [];
-    const words = text.split(' ');
-    let currentLine = '';
+    // Split into paragraphs
+    const paragraphs = value.split(/\r?\n/);
     
-    for (const word of words) {
-      const testLine = currentLine ? `${currentLine} ${word}` : word;
-      const lineWidth = font.widthOfTextAtSize(testLine, fontSize);
-      if (lineWidth > maxWidth) {
-        lines.push(currentLine);
-        currentLine = word;
-      } else {
-        currentLine = testLine;
+    for (const para of paragraphs) {
+      if (!para.trim()) {
+        y -= lineHeight;
+        continue;
       }
-    }
-    lines.push(currentLine);
-    
-    for (const line of lines) {
-      if (y < margin) break; // simplistic: stop at bottom of page
-      page.drawText(line, { x: margin, y, size: fontSize, font });
-      y -= fontSize * 1.4;
+      
+      const words = para.split(/\s+/);
+      let currentLine = '';
+      
+      for (const word of words) {
+        const testLine = currentLine ? `${currentLine} ${word}` : word;
+        const lineWidth = font.widthOfTextAtSize(testLine, fontSize);
+        
+        if (lineWidth > maxWidth) {
+          if (y < margin + lineHeight) {
+            page = pdfDoc.addPage();
+            y = height - margin;
+          }
+          page.drawText(currentLine, { x: margin, y, size: fontSize, font });
+          y -= lineHeight;
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      }
+      
+      if (currentLine) {
+        if (y < margin + lineHeight) {
+          page = pdfDoc.addPage();
+          y = height - margin;
+        }
+        page.drawText(currentLine, { x: margin, y, size: fontSize, font });
+        y -= lineHeight;
+      }
+      
+      y -= 4; // Extra paragraph spacing
     }
     
     return await pdfDoc.save();
@@ -74,10 +109,11 @@ async function getPdfBytes(file) {
   throw new Error(`File type ${file.mimetype} is currently not supported for this tool. Please use PDF, DOCX, JPG, or PNG.`);
 }
 
-// Helper: save output and return URL
+// Helper: save output and return URL (auto-cleanup)
 async function saveOutput(pdfBytes, filename) {
   const outPath = path.join(outputDir, filename);
   fs.writeFileSync(outPath, pdfBytes);
+  cleanup([outPath]); // Schedule output deletion
   return { filename, url: `/outputs/${filename}`, size: pdfBytes.length };
 }
 
@@ -90,13 +126,19 @@ async function saveHistory(userId, sessionId, operation, inputFiles, outputFile,
   } catch (e) { /* ignore history save errors */ }
 }
 
-// Helper: cleanup temp files
-function cleanup(files) {
-  setTimeout(() => {
+// Helper: cleanup files
+function cleanup(files, delayMs = 3600000) {
+  if (delayMs === 0) {
     files.forEach(f => {
       try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {}
     });
-  }, 60000); // cleanup after 1 minute
+  } else {
+    setTimeout(() => {
+      files.forEach(f => {
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (e) {}
+      });
+    }, delayMs);
+  }
 }
 
 // ==================== MERGE PDF ====================
@@ -122,7 +164,7 @@ router.post('/merge', optionalAuth, upload.array('files', 20), async (req, res) 
       req.files.map(f => ({ name: f.originalname, size: f.size })),
       output, processingTime
     );
-    cleanup(req.files.map(f => f.path));
+    cleanup(req.files.map(f => f.path), 0);
     res.json({ success: true, message: 'PDFs merged successfully', output, processingTime });
   } catch (err) {
     res.status(500).json({ error: 'Failed to merge PDFs: ' + err.message });
@@ -168,7 +210,7 @@ router.post('/split', optionalAuth, upload.single('file'), async (req, res) => {
       }
     }
 
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({ success: true, message: `PDF split into ${outputs.length} parts`, outputs, totalPages, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to split PDF: ' + err.message });
@@ -189,7 +231,7 @@ router.post('/compress', optionalAuth, upload.single('file'), async (req, res) =
     const originalSize = req.file.size;
     const compressedSize = compressedBytes.length;
     const reduction = Math.round((1 - compressedSize / originalSize) * 100);
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({
       success: true,
       message: `PDF compressed by ${Math.max(0, reduction)}%`,
@@ -229,7 +271,7 @@ router.post('/rotate', optionalAuth, upload.single('file'), async (req, res) => 
     const rotatedBytes = await pdf.save();
     const filename = `rotated_${uuidv4()}.pdf`;
     const output = await saveOutput(rotatedBytes, filename);
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({ success: true, message: `PDF rotated ${rotation}°`, output, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to rotate PDF: ' + err.message });
@@ -272,7 +314,7 @@ router.post('/watermark', optionalAuth, upload.single('file'), async (req, res) 
     const watermarkedBytes = await pdf.save();
     const filename = `watermarked_${uuidv4()}.pdf`;
     const output = await saveOutput(watermarkedBytes, filename);
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Watermark added successfully', output, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to add watermark: ' + err.message });
@@ -292,7 +334,7 @@ router.post('/protect', optionalAuth, upload.single('file'), async (req, res) =>
     const protectedBytes = await pdf.save();
     const filename = `protected_${uuidv4()}.pdf`;
     const output = await saveOutput(protectedBytes, filename);
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({ success: true, message: 'PDF protection applied', output, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to protect PDF: ' + err.message });
@@ -318,7 +360,7 @@ router.post('/reorder', optionalAuth, upload.single('file'), async (req, res) =>
     const reorderedBytes = await reorderedPdf.save();
     const filename = `reordered_${uuidv4()}.pdf`;
     const output = await saveOutput(reorderedBytes, filename);
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Pages reordered successfully', output, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to reorder pages: ' + err.message });
@@ -347,7 +389,7 @@ router.post('/info', upload.single('file'), async (req, res) => {
         rotation: p.getRotation().angle
       }))
     };
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({ success: true, info });
   } catch (err) {
     res.status(500).json({ error: 'Failed to read PDF info: ' + err.message });
@@ -382,7 +424,7 @@ router.post('/image-to-pdf', optionalAuth, upload.array('files', 20), async (req
       req.files.map(f => ({ name: f.originalname, size: f.size })),
       output, processingTime
     );
-    cleanup(req.files.map(f => f.path));
+    cleanup(req.files.map(f => f.path), 0);
     res.json({ success: true, message: 'Images converted to PDF successfully', output, processingTime });
   } catch (err) {
     res.status(500).json({ error: 'Failed to convert images to PDF: ' + err.message });
@@ -390,7 +432,6 @@ router.post('/image-to-pdf', optionalAuth, upload.array('files', 20), async (req
 });
 
 // ==================== PDF TO TEXT ====================
-const pdfParse = require('pdf-parse');
 router.post('/extract-text', optionalAuth, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
@@ -399,19 +440,38 @@ router.post('/extract-text', optionalAuth, upload.single('file'), async (req, re
     const data = await pdfParse(pdfBytes);
     const text = data.text;
     const filename = `text_${uuidv4()}.txt`;
-    const outPath = path.join(outputDir, filename);
-    fs.writeFileSync(outPath, text);
-    const output = { filename, url: `/outputs/${filename}`, size: text.length };
+    const output = await saveOutput(Buffer.from(text), filename);
     const processingTime = Date.now() - start;
     await saveHistory(
       req.user?._id, req.body.sessionId, 'extract-text',
       [{ name: req.file.originalname, size: req.file.size }],
       output, processingTime
     );
-    cleanup([req.file.path]);
+    cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Text extracted successfully', text, output, processingTime });
   } catch (err) {
     res.status(500).json({ error: 'Failed to extract text: ' + err.message });
+  }
+});
+
+// ==================== WORD TO PDF ====================
+router.post('/word-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a Word file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const filename = `word_to_pdf_${uuidv4()}.pdf`;
+    const output = await saveOutput(pdfBytes, filename);
+    const processingTime = Date.now() - start;
+    await saveHistory(
+      req.user?._id, req.body.sessionId, 'word-to-pdf',
+      [{ name: req.file.originalname, size: req.file.size }],
+      output, processingTime
+    );
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'Word document converted to PDF successfully', output, processingTime });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to convert Word to PDF: ' + err.message });
   }
 });
 
