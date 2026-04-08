@@ -475,5 +475,231 @@ router.post('/word-to-pdf', optionalAuth, upload.single('file'), async (req, res
   }
 });
 
+// ==================== DELETE PAGES ====================
+router.post('/delete-pages', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const pagesToDelete = JSON.parse(req.body.pages || '[]').map(n => parseInt(n) - 1);
+    
+    const totalPages = pdf.getPageCount();
+    const indicesToKeep = [];
+    for (let i = 0; i < totalPages; i++) {
+      if (!pagesToDelete.includes(i)) indicesToKeep.push(i);
+    }
+
+    if (indicesToKeep.length === 0) return res.status(400).json({ error: 'Cannot delete all pages' });
+
+    const newPdf = await PDFDocument.create();
+    const copiedPages = await newPdf.copyPages(pdf, indicesToKeep);
+    copiedPages.forEach(p => newPdf.addPage(p));
+
+    const resultBytes = await newPdf.save();
+    const filename = `deleted_pages_${uuidv4()}.pdf`;
+    const output = await saveOutput(resultBytes, filename);
+    
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: `Deleted ${pagesToDelete.length} pages`, output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete pages: ' + err.message });
+  }
+});
+
+// ==================== ADD PAGE NUMBERS ====================
+router.post('/page-numbers', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const position = req.body.position || 'bottom-center';
+    const fontSize = parseInt(req.body.fontSize || '10');
+    
+    const pages = pdf.getPages();
+    pages.forEach((page, i) => {
+      const { width, height } = page.getSize();
+      const text = `${i + 1} / ${pages.length}`;
+      const textWidth = font.widthOfTextAtSize(text, fontSize);
+      
+      let x, y;
+      if (position.includes('bottom')) y = 20;
+      else if (position.includes('top')) y = height - 30;
+      else y = height / 2;
+
+      if (position.includes('left')) x = 30;
+      else if (position.includes('right')) x = width - textWidth - 30;
+      else x = (width - textWidth) / 2;
+
+      page.drawText(text, { x, y, size: fontSize, font, color: rgb(0.5, 0.5, 0.5) });
+    });
+
+    const numberedBytes = await pdf.save();
+    const filename = `numbered_${uuidv4()}.pdf`;
+    const output = await saveOutput(numberedBytes, filename);
+    cleanup([req.file.path], 1000); // give it a sec
+    res.json({ success: true, message: 'Page numbers added successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to add page numbers: ' + err.message });
+  }
+});
+
+// ==================== ADD STAMP ====================
+router.post('/add-stamp', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdf = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+    const stampText = req.body.text || 'APPROVED';
+    const color = req.body.color || '#FF0000';
+    
+    const r = parseInt(color.slice(1, 3), 16) / 255;
+    const g = parseInt(color.slice(3, 5), 16) / 255;
+    const b = parseInt(color.slice(5, 7), 16) / 255;
+
+    const pages = pdf.getPages();
+    pages.forEach(page => {
+      const { width, height } = page.getSize();
+      const fontSize = 60;
+      const textWidth = font.widthOfTextAtSize(stampText, fontSize);
+      
+      page.drawText(stampText, {
+        x: (width - textWidth) / 2,
+        y: height / 2,
+        size: fontSize,
+        font,
+        color: rgb(r, g, b),
+        opacity: 0.2,
+        rotate: degrees(30)
+      });
+      
+      // Draw a border box around stamp
+      page.drawRectangle({
+        x: (width - textWidth) / 2 - 10,
+        y: height / 2 - 10,
+        width: textWidth + 20,
+        height: fontSize + 10,
+        borderColor: rgb(r, g, b),
+        borderWidth: 2,
+        opacity: 0.2,
+        rotate: degrees(30)
+      });
+    });
+
+    const stampedBytes = await pdf.save();
+    const filename = `stamped_${uuidv4()}.pdf`;
+    const output = await saveOutput(stampedBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'Stamp added successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to add stamp: ' + err.message });
+  }
+});
+
+// ==================== JSON TO PDF ====================
+router.post('/json-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a JSON file' });
+  try {
+    const jsonText = fs.readFileSync(req.file.path, 'utf8');
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Courier);
+    
+    const lines = JSON.stringify(JSON.parse(jsonText), null, 2).split('\n');
+    let page = pdfDoc.addPage();
+    let y = page.getSize().height - 50;
+    
+    for (const line of lines) {
+      if (y < 50) {
+        page = pdfDoc.addPage();
+        y = page.getSize().height - 50;
+      }
+      page.drawText(line, { x: 50, y, size: 9, font });
+      y -= 11;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const filename = `json_to_pdf_${uuidv4()}.pdf`;
+    const output = await saveOutput(pdfBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'JSON converted to PDF successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to convert JSON: ' + err.message });
+  }
+});
+
+// ==================== XML TO PDF ====================
+router.post('/xml-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload an XML file' });
+  try {
+    const xmlText = fs.readFileSync(req.file.path, 'utf8');
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Courier);
+    
+    const lines = xmlText.split('\n');
+    let page = pdfDoc.addPage();
+    let y = page.getSize().height - 50;
+    
+    for (const line of lines) {
+      if (y < 50) {
+        page = pdfDoc.addPage();
+        y = page.getSize().height - 50;
+      }
+      page.drawText(line.substring(0, 100), { x: 50, y, size: 9, font });
+      y -= 11;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const filename = `xml_to_pdf_${uuidv4()}.pdf`;
+    const output = await saveOutput(pdfBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'XML converted to PDF successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to convert XML: ' + err.message });
+  }
+});
+
+// ==================== EMAIL TO PDF ====================
+router.post('/email-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload an Email file (.eml or .txt)' });
+  try {
+    const emailText = fs.readFileSync(req.file.path, 'utf8');
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    
+    let page = pdfDoc.addPage();
+    let { width, height } = page.getSize();
+    let y = height - 50;
+
+    page.drawText('Email Document Export', { x: 50, y, size: 18, font: boldFont });
+    y -= 30;
+
+    const lines = emailText.split('\n');
+    for (const line of lines) {
+      if (y < 50) {
+        page = pdfDoc.addPage();
+        y = page.getSize().height - 50;
+      }
+      page.drawText(line.substring(0, 90), { x: 50, y, size: 10, font });
+      y -= 14;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const filename = `email_to_pdf_${uuidv4()}.pdf`;
+    const output = await saveOutput(pdfBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'Email converted to PDF successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to convert Email: ' + err.message });
+  }
+});
+
 module.exports = router;
 
