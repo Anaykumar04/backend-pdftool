@@ -863,10 +863,18 @@ router.post('/translate', upload.single('file'), async (req, res) => {
     const dataBuffer = fs.readFileSync(req.file.path);
     const data = await pdfParse(dataBuffer);
     
+    if (!data || !data.text || data.text.trim().length === 0) {
+        throw new Error('No text found in PDF. This tool works best with text-based documents, not scanned images.');
+    }
+
     // Translation (handling text length limits for stability)
-    const originalText = data.text;
-    const translation = await translatte(originalText.substring(0, 5000), { to: toLanguage });
+    const textToTranslate = data.text.substring(0, 4500); 
+    const translation = await translatte(textToTranslate, { to: toLanguage });
     
+    if (!translation || !translation.text) {
+        throw new Error('Translation service failed to return text.');
+    }
+
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -878,14 +886,21 @@ router.post('/translate', upload.single('file'), async (req, res) => {
     page.drawText(`Translated Document (${toLanguage.toUpperCase()})`, { x: 50, y, size: 16, font: boldFont });
     y -= 40;
 
-    const lines = (translation.text || '').split('\n');
-    for (const line of lines) {
+    const lines = translation.text.split('\n');
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      
       if (y < 40) {
         page = pdfDoc.addPage();
         y = height - 50;
       }
-      page.drawText(line.substring(0, 100), { x: 50, y, size: 9, font });
-      y -= 12;
+      try {
+          page.drawText(line.substring(0, 95), { x: 50, y, size: 9, font });
+          y -= 13;
+      } catch (e) {
+          // If winansi encoding fails, we skip character or line
+      }
     }
 
     const pdfBytes = await pdfDoc.save();
@@ -895,7 +910,8 @@ router.post('/translate', upload.single('file'), async (req, res) => {
     cleanup([req.file.path], 0);
     res.json({ success: true, message: `Translated to ${toLanguage} successfully`, output, processingTime: Date.now() - start });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to translate: ' + err.message });
+    console.error('Translation Error:', err);
+    res.status(500).json({ error: 'Translation Error: ' + err.message });
   }
 });
 
