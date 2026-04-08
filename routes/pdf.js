@@ -10,7 +10,6 @@ const History = require('../models/History');
 const mammoth = require('mammoth');
 const translatte = require('translatte');
 const pdfParse = require('pdf-parse');
-const pdfParse = require('pdf-parse');
 const sharp = require('sharp');
 
 const outputDir = path.join(__dirname, '../outputs');
