@@ -974,5 +974,70 @@ router.post('/add-rubber-stamp', optionalAuth, upload.single('file'), async (req
   }
 });
 
+// ==================== BACKGROUND COLOR ====================
+router.post('/background-color', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const colorCode = req.body.color || '#FFFFFF';
+    const r = parseInt(colorCode.slice(1,3), 16)/255;
+    const g = parseInt(colorCode.slice(3,5), 16)/255;
+    const b = parseInt(colorCode.slice(5,7), 16)/255;
+    
+    const originalPdfBytes = await getPdfBytes(req.file);
+    const originalPdf = await PDFDocument.load(originalPdfBytes, { ignoreEncryption: true });
+    const newPdf = await PDFDocument.create();
+    
+    const pages = originalPdf.getPages();
+    const embeddedPages = await newPdf.embedPages(pages);
+
+    for (let i = 0; i < pages.length; i++) {
+        const { width, height } = pages[i].getSize();
+        const newPage = newPdf.addPage([width, height]);
+        newPage.drawRectangle({ x: 0, y: 0, width, height, color: rgb(r, g, b) });
+        newPage.drawPage(embeddedPages[i], { x: 0, y: 0, width, height });
+    }
+
+    const resultBytes = await newPdf.save();
+    const filename = `bg_${uuidv4()}.pdf`;
+    const output = await saveOutput(resultBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'Background updated', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed: ' + err.message });
+  }
+});
+
+// ==================== EDIT PDF ====================
+router.post('/edit-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const edits = JSON.parse(req.body.edits || '[]');
+    const pages = pdfDoc.getPages();
+    
+    edits.forEach(e => {
+        const page = pages[e.pageIndex || 0];
+        if (page) {
+            page.drawText(e.text, {
+                x: parseFloat(e.x), y: parseFloat(e.y),
+                size: parseFloat(e.size || 12), font, color: rgb(0,0,0)
+            });
+        }
+    });
+
+    const editedBytes = await pdfDoc.save();
+    const filename = `edited_${uuidv4()}.pdf`;
+    const output = await saveOutput(editedBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'Edits applied', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to edit: ' + err.message });
+  }
+});
+
 module.exports = router;
 
