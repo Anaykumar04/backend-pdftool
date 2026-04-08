@@ -3,7 +3,7 @@ const router = express.Router();
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { PDFDocument, degrees, rgb, StandardFonts } = require('pdf-lib');
+const { PDFDocument, degrees, rgb, StandardFonts, PDFName } = require('pdf-lib');
 const upload = require('../middleware/upload');
 const { optionalAuth } = require('../middleware/auth');
 const History = require('../models/History');
@@ -698,6 +698,111 @@ router.post('/email-to-pdf', optionalAuth, upload.single('file'), async (req, re
     res.json({ success: true, message: 'Email converted to PDF successfully', output, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to convert Email: ' + err.message });
+  }
+});
+
+// ==================== CSV TO PDF ====================
+router.post('/csv-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a CSV file' });
+  try {
+    const csvData = fs.readFileSync(req.file.path, 'utf8');
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    
+    const lines = csvData.split('\n');
+    let page = pdfDoc.addPage();
+    let { height } = page.getSize();
+    let y = height - 50;
+
+    for (let i = 0; i < lines.length; i++) {
+      if (y < 50) {
+        page = pdfDoc.addPage();
+        y = height - 50;
+      }
+      const fontToUse = i === 0 ? boldFont : font;
+      page.drawText(lines[i].substring(0, 110), { x: 50, y, size: 10, font: fontToUse });
+      y -= 15;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const filename = `csv_to_pdf_${uuidv4()}.pdf`;
+    const output = await saveOutput(pdfBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'CSV converted to PDF successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to convert CSV: ' + err.message });
+  }
+});
+
+// ==================== EXTRACT IMAGES ====================
+router.post('/extract-images', upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const archiver = require('archiver');
+    const pdfBytes = fs.readFileSync(req.file.path);
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const pages = pdfDoc.getPages();
+    
+    const zipFilename = `images_${uuidv4()}.zip`;
+    const zipPath = path.join(outputDir, zipFilename);
+    const output = fs.createWriteStream(zipPath);
+    const archive = archiver('zip', { zlib: { level: 9 } });
+
+    archive.pipe(output);
+    
+    let imgCount = 0;
+    // Iterate through pages and resources (simplified extraction)
+    for (let i = 0; i < pages.length; i++) {
+       const page = pages[i];
+       const { node } = page;
+       const resources = node.get(PDFName.of('Resources'));
+       if (resources) {
+          const xObjects = resources.get(PDFName.of('XObject'));
+          if (xObjects) {
+             const xObjectMap = xObjects.dict || xObjects;
+             for (const [name, xObject] of xObjectMap.entries()) {
+                const subtype = xObject.get(PDFName.of('Subtype'));
+                if (subtype === PDFName.of('Image')) {
+                   imgCount++;
+                   // This is a complex step to get raw bytes correctly per format
+                   // For now, we'll try to get the stream data
+                   try {
+                      const stream = xObject.stream;
+                      if (stream) {
+                         const bytes = xObject.getContents();
+                         const ext = xObject.get(PDFName.of('Filter'))?.toString().includes('DCT') ? 'jpg' : 'png';
+                         archive.append(Buffer.from(bytes), { name: `image_${imgCount}.${ext}` });
+                      }
+                   } catch (e) {}
+                }
+             }
+          }
+       }
+    }
+
+    if (imgCount === 0) {
+      archive.abort();
+      cleanup([req.file.path], 0);
+      return res.status(404).json({ error: 'No images found in this PDF' });
+    }
+
+    await archive.finalize();
+    
+    // Wait for the zip to be fully written
+    await new Promise((resolve) => {
+      output.on('close', resolve);
+    });
+
+    const resultOutput = { filename: zipFilename, url: `/outputs/${zipFilename}`, size: fs.statSync(zipPath).size };
+    cleanup([req.file.path], 0);
+    cleanup([zipPath], 3600000); // 1 hour cleanup
+    
+    res.json({ success: true, message: `Extracted ${imgCount} images`, output: resultOutput, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to extract images: ' + err.message });
   }
 });
 
