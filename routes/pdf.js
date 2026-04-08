@@ -900,5 +900,80 @@ router.post('/translate', upload.single('file'), async (req, res) => {
   }
 });
 
+// ==================== ADD PROFESSIONAL STAMP ====================
+router.post('/add-rubber-stamp', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    
+    const text = req.body.text || 'APPROVED';
+    const variant = req.body.variant || 'rectangular';
+    const colorCode = req.body.color || '#FF0000';
+    const opacity = parseFloat(req.body.opacity || '0.4');
+    
+    const r = parseInt(colorCode.slice(1,3), 16)/255;
+    const g = parseInt(colorCode.slice(3,5), 16)/255;
+    const b = parseInt(colorCode.slice(5,7), 16)/255;
+    
+    const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const pages = pdfDoc.getPages();
+    
+    pages.forEach(page => {
+      const { width, height } = page.getSize();
+      const fontSize = 42;
+      const textWidth = font.widthOfTextAtSize(text, fontSize);
+      
+      const centerX = width / 2;
+      const centerY = height / 2;
+      
+      const options = {
+          x: centerX - (textWidth / 2),
+          y: centerY - (fontSize / 2),
+          size: fontSize,
+          font,
+          color: rgb(r, g, b),
+          opacity,
+          rotate: degrees(15),
+      };
+
+      if (variant === 'circular') {
+          page.drawEllipse({
+              x: centerX,
+              y: centerY,
+              xScale: textWidth * 0.7,
+              yScale: textWidth * 0.7,
+              borderColor: rgb(r, g, b),
+              borderWidth: 4,
+              opacity,
+              rotate: degrees(15)
+          });
+          page.drawText(text, { ...options, x: centerX - (textWidth / 2) + 5, size: fontSize * 0.8 });
+      } else {
+          page.drawRectangle({
+              x: centerX - (textWidth / 2) - 15,
+              y: centerY - (fontSize / 2) - 10,
+              width: textWidth + 30,
+              height: fontSize + 20,
+              borderColor: rgb(r, g, b),
+              borderWidth: 4,
+              opacity,
+              rotate: degrees(15)
+          });
+          page.drawText(text, options);
+      }
+    });
+
+    const resultBytes = await pdfDoc.save();
+    const filename = `stamped_${uuidv4()}.pdf`;
+    const output = await saveOutput(resultBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'Professional stamp added successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to add stamp: ' + err.message });
+  }
+});
+
 module.exports = router;
 
