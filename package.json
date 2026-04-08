@@ -22,6 +22,7 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",
     "sharp": "^0.33.3",
+    "translatte": "^3.0.1",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

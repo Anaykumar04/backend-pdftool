@@ -8,6 +8,8 @@ const upload = require('../middleware/upload');
 const { optionalAuth } = require('../middleware/auth');
 const History = require('../models/History');
 const mammoth = require('mammoth');
+const translatte = require('translatte');
+const pdfParse = require('pdf-parse');
 const pdfParse = require('pdf-parse');
 const sharp = require('sharp');
 
@@ -803,6 +805,98 @@ router.post('/extract-images', upload.single('file'), async (req, res) => {
     res.json({ success: true, message: `Extracted ${imgCount} images`, output: resultOutput, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to extract images: ' + err.message });
+  }
+});
+
+// ==================== SIGN WITH IMAGE ====================
+router.post('/sign-image', optionalAuth, upload.fields([{ name: 'pdf', maxCount: 1 }, { name: 'signature', maxCount: 1 }]), async (req, res) => {
+  const start = Date.now();
+  const pdfFile = req.files['pdf']?.[0];
+  const sigFile = req.files['signature']?.[0];
+  
+  if (!pdfFile || !sigFile) return res.status(400).json({ error: 'Please upload both PDF and signature image' });
+  
+  try {
+    const pdfBytes = await getPdfBytes(pdfFile);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    
+    // Process signature image with sharp to trim and normalize
+    const sigRaw = fs.readFileSync(sigFile.path);
+    const sigProcessed = await sharp(sigRaw).trim().png().toBuffer();
+    const sigMetadata = await sharp(sigProcessed).metadata();
+    
+    const image = await pdfDoc.embedPng(sigProcessed);
+    
+    const position = req.body.position || 'bottom-right';
+    const pages = pdfDoc.getPages();
+    const lastPage = pages[pages.length - 1]; // Sign the last page by default
+    const { width, height } = lastPage.getSize();
+    
+    const sigWidth = 140;
+    const sigHeight = (sigMetadata.height / sigMetadata.width) * sigWidth;
+    
+    let x, y;
+    if (position === 'bottom-right') { x = width - sigWidth - 60; y = 60; }
+    else if (position === 'bottom-left') { x = 60; y = 60; }
+    else if (position === 'top-right') { x = width - sigWidth - 60; y = height - sigHeight - 60; }
+    else if (position === 'top-left') { x = 60; y = height - sigHeight - 60; }
+    else { x = (width - sigWidth) / 2; y = (height - sigHeight) / 2; } // Center
+
+    lastPage.drawImage(image, { x, y, width: sigWidth, height: sigHeight });
+
+    const signedBytes = await pdfDoc.save();
+    const filename = `signed_${uuidv4()}.pdf`;
+    const output = await saveOutput(signedBytes, filename);
+    
+    cleanup([pdfFile.path, sigFile.path], 0);
+    res.json({ success: true, message: 'Signed successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to sign: ' + err.message });
+  }
+});
+
+// ==================== TRANSLATE PDF ====================
+router.post('/translate', upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const toLanguage = req.body.to || 'en';
+    const dataBuffer = fs.readFileSync(req.file.path);
+    const data = await pdfParse(dataBuffer);
+    
+    // Translation (handling text length limits for stability)
+    const originalText = data.text;
+    const translation = await translatte(originalText.substring(0, 5000), { to: toLanguage });
+    
+    const pdfDoc = await PDFDocument.create();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    
+    let page = pdfDoc.addPage();
+    let { height } = page.getSize();
+    let y = height - 50;
+
+    page.drawText(`Translated Document (${toLanguage.toUpperCase()})`, { x: 50, y, size: 16, font: boldFont });
+    y -= 40;
+
+    const lines = (translation.text || '').split('\n');
+    for (const line of lines) {
+      if (y < 40) {
+        page = pdfDoc.addPage();
+        y = height - 50;
+      }
+      page.drawText(line.substring(0, 100), { x: 50, y, size: 9, font });
+      y -= 12;
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const filename = `translated_${toLanguage}_${uuidv4()}.pdf`;
+    const output = await saveOutput(pdfBytes, filename);
+    
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: `Translated to ${toLanguage} successfully`, output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to translate: ' + err.message });
   }
 });
 
