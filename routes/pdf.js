@@ -1065,42 +1065,46 @@ router.post('/detect-fields', optionalAuth, upload.single('file'), async (req, r
     const form = pdfDoc.getForm();
     const fields = form.getFields();
     
-    // Mapping pdf-lib fields to a frontend-friendly format
-    const detected = fields.map((f, i) => {
-        const name = f.getName();
-        let type = 'text';
-        if (f.constructor.name.includes('CheckBox')) type = 'checkbox';
-        if (f.constructor.name.includes('Dropdown')) type = 'dropdown';
-        
-        return {
-            id: i,
-            label: name,
-            name: name,
-            value: '',
-            top: (150 + (i * 55)) + 'px', 
-            left: '160px',
-            width: '380px',
-            type
-        };
-    });
-
     // If no AcroForm fields found, simulate "Smart Scan" detection
-    if (detected.length === 0) {
+    // and actually EMBED real AcroForm fields into the PDF.
+    if (fields.length === 0) {
         const data = await pdfParse(pdfBytes);
-        const text = data.text;
+        const text = data.text.toLowerCase();
         
-        let idCount = 1;
-        if (text.toLowerCase().includes('name')) detected.push({ id: idCount++, label: 'Full Name', name: 'name', value: '', top: '155px', left: '160px', width: '380px' });
-        if (text.toLowerCase().includes('account')) detected.push({ id: idCount++, label: 'Account Number', name: 'account', value: '', top: '210px', left: '160px', width: '220px' });
-        if (text.toLowerCase().includes('address')) detected.push({ id: idCount++, label: 'Address', name: 'address', value: '', top: '265px', left: '160px', width: '380px' });
-        if (text.toLowerCase().includes('date')) detected.push({ id: idCount++, label: 'Date', name: 'date', value: '', top: '430px', left: '360px', width: '180px' });
+        const pages = pdfDoc.getPages();
+        const page = pages[0]; // operate on first page
+        const { height } = page.getSize();
+        
+        // Helper to add a text field
+        const addTextField = (name, x, y, width, h = 20) => {
+            try {
+                const tf = form.createTextField(name);
+                tf.addToPage(page, { x, y: height - y, width, height: h, borderWidth: 1, borderColor: rgb(0.2, 0.2, 0.8), backgroundColor: rgb(0.95, 0.95, 1) });
+            } catch (e) { /* ignore duplicate name errors */ }
+        };
+
+        // We place some dummy fields if certain keywords are detected
+        if (text.includes('name')) addTextField('FullName', 160, 155 + 20, 380);
+        if (text.includes('account')) addTextField('AccountNumber', 160, 210 + 20, 220);
+        if (text.includes('address')) addTextField('Address', 160, 265 + 20, 380);
+        if (text.includes('date')) addTextField('Date', 360, 430 + 20, 180);
+        
+        // If absolutely no keywords found, add some default fields at top
+        if (!text.includes('name') && !text.includes('account')) {
+            addTextField('DigitalField1', 50, 50, 200);
+            addTextField('DigitalField2', 50, 90, 200);
+        }
     }
+
+    const resultBytes = await pdfDoc.save();
+    const filename = `fillable_scanned_${uuidv4()}.pdf`;
+    const output = await saveOutput(resultBytes, filename);
 
     cleanup([req.file.path], 0);
     res.json({ 
         success: true, 
-        message: detected.length > 0 ? `Detected ${detected.length} fields` : 'Scanning complete. Manual entry available.', 
-        fields: detected,
+        message: 'PDF is now digitally fillable in real-time!', 
+        output,
         processingTime: Date.now() - start 
     });
   } catch (err) {
