@@ -1120,21 +1120,29 @@ router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) 
     const pdfBytes = fs.readFileSync(req.file.path);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const form = pdfDoc.getForm();
-    const fieldData = JSON.parse(req.body.data || '[]'); // frontend sends it as 'data'
+    const fieldData = JSON.parse(req.body.data || '[]'); 
     
+    const pages = pdfDoc.getPages();
+    const page = pages[0];
+    const { width, height } = page.getSize();
+
     fieldData.forEach(data => {
         try {
-            const field = form.getField(data.name);
+            // Check if it's an AcroForm field first
+            const field = form.getFields().find(f => f.getName() === data.name);
             if (field) {
                 if (field.constructor.name.includes('TextField')) field.setText(data.value);
                 else if (field.constructor.name.includes('CheckBox')) data.value ? field.check() : field.uncheck();
-            } else if (data.top && data.left) {
-                const pages = pdfDoc.getPages();
-                const page = pages[0];
-                const { height } = page.getSize();
-                const x = parseFloat(data.left);
-                const y = height - parseFloat(data.top) - 8;
-                page.drawText(data.value, { x, y, size: 11 });
+            } else if (data.xPct !== undefined && data.yPct !== undefined) {
+                // Free text overlay for scanned images
+                const x = data.xPct * width;
+                const y = height - (data.yPct * height) - 10; // offset font size
+                page.drawText(data.value || '', { 
+                    x, 
+                    y, 
+                    size: 11,
+                    color: rgb(0.1, 0.1, 0.2) // dark slightly blueish ink
+                });
             }
         } catch (e) {}
     });
@@ -1143,7 +1151,7 @@ router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) 
     const filename = `filled_${uuidv4()}.pdf`;
     const output = await saveOutput(resultBytes, filename);
     cleanup([req.file.path], 0);
-    res.json({ success: true, message: 'PDF processed successfully', output, processingTime: Date.now() - start });
+    res.json({ success: true, message: 'Form filled successfully!', output, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to process PDF: ' + err.message });
   }
