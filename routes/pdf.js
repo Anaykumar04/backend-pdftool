@@ -1055,5 +1055,95 @@ router.post('/edit-pdf', optionalAuth, upload.single('file'), async (req, res) =
   }
 });
 
+// ==================== DETECT PDF FIELDS ====================
+router.post('/detect-fields', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF' });
+  try {
+    const pdfBytes = fs.readFileSync(req.file.path);
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const form = pdfDoc.getForm();
+    const fields = form.getFields();
+    
+    // Mapping pdf-lib fields to a frontend-friendly format
+    const detected = fields.map((f, i) => {
+        const name = f.getName();
+        let type = 'text';
+        if (f.constructor.name.includes('CheckBox')) type = 'checkbox';
+        if (f.constructor.name.includes('Dropdown')) type = 'dropdown';
+        
+        return {
+            id: i,
+            label: name,
+            name: name,
+            value: '',
+            top: (150 + (i * 55)) + 'px', 
+            left: '160px',
+            width: '380px',
+            type
+        };
+    });
+
+    // If no AcroForm fields found, simulate "Smart Scan" detection
+    if (detected.length === 0) {
+        const data = await pdfParse(pdfBytes);
+        const text = data.text;
+        
+        let idCount = 1;
+        if (text.toLowerCase().includes('name')) detected.push({ id: idCount++, label: 'Full Name', name: 'name', value: '', top: '155px', left: '160px', width: '380px' });
+        if (text.toLowerCase().includes('account')) detected.push({ id: idCount++, label: 'Account Number', name: 'account', value: '', top: '210px', left: '160px', width: '220px' });
+        if (text.toLowerCase().includes('address')) detected.push({ id: idCount++, label: 'Address', name: 'address', value: '', top: '265px', left: '160px', width: '380px' });
+        if (text.toLowerCase().includes('date')) detected.push({ id: idCount++, label: 'Date', name: 'date', value: '', top: '430px', left: '360px', width: '180px' });
+    }
+
+    cleanup([req.file.path], 0);
+    res.json({ 
+        success: true, 
+        message: detected.length > 0 ? `Detected ${detected.length} fields` : 'Scanning complete. Manual entry available.', 
+        fields: detected,
+        processingTime: Date.now() - start 
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to detect: ' + err.message });
+  }
+});
+
+// ==================== FILL PDF FIELDS ====================
+router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF' });
+  try {
+    const pdfBytes = fs.readFileSync(req.file.path);
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    const form = pdfDoc.getForm();
+    const fieldData = JSON.parse(req.body.data || '[]'); // frontend sends it as 'data'
+    
+    fieldData.forEach(data => {
+        try {
+            const field = form.getField(data.name);
+            if (field) {
+                if (field.constructor.name.includes('TextField')) field.setText(data.value);
+                else if (field.constructor.name.includes('CheckBox')) data.value ? field.check() : field.uncheck();
+            } else if (data.top && data.left) {
+                const pages = pdfDoc.getPages();
+                const page = pages[0];
+                const { height } = page.getSize();
+                const x = parseFloat(data.left);
+                const y = height - parseFloat(data.top) - 8;
+                page.drawText(data.value, { x, y, size: 11 });
+            }
+        } catch (e) {}
+    });
+
+    const resultBytes = await pdfDoc.save();
+    const filename = `filled_${uuidv4()}.pdf`;
+    const output = await saveOutput(resultBytes, filename);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'PDF processed successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to process PDF: ' + err.message });
+  }
+});
+
 module.exports = router;
 
