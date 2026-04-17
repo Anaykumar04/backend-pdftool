@@ -20,15 +20,20 @@ const limiter = rateLimit({
 // Middleware
 app.use(limiter);
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  origin: process.env.NODE_ENV === 'production' ? true : ['http://localhost:5173', 'http://localhost:3000'],
   credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Create uploads directory
-const uploadsDir = path.join(__dirname, 'uploads');
-const outputDir = path.join(__dirname, 'outputs');
+const uploadsDir = process.env.NODE_ENV === 'production' 
+  ? path.join('/tmp', 'uploads') 
+  : path.join(__dirname, 'uploads');
+const outputDir = process.env.NODE_ENV === 'production' 
+  ? path.join('/tmp', 'outputs') 
+  : path.join(__dirname, 'outputs');
+
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
@@ -55,8 +60,10 @@ mongoose.connect(process.env.MONGO_URI)
   });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 PDF Editor Server running on http://localhost:${PORT}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀 PDF Editor Server running on http://localhost:${PORT}`);
+  });
+}
 
 module.exports = app;

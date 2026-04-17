@@ -12,7 +12,9 @@ const translatte = require('translatte');
 const pdfParse = require('pdf-parse');
 const sharp = require('sharp');
 
-const outputDir = path.join(__dirname, '../outputs');
+const outputDir = process.env.NODE_ENV === 'production' 
+  ? path.join('/tmp', 'outputs') 
+  : path.join(__dirname, '../outputs');
 
 // Helper: get PDF bytes from file (auto-converts images to PDF)
 async function getPdfBytes(file) {
@@ -1115,9 +1117,9 @@ router.post('/detect-fields', optionalAuth, upload.single('file'), async (req, r
 // ==================== FILL PDF FIELDS ====================
 router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) => {
   const start = Date.now();
-  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF' });
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF or document' });
   try {
-    const pdfBytes = fs.readFileSync(req.file.path);
+    const pdfBytes = await getPdfBytes(req.file);
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const form = pdfDoc.getForm();
     const fieldData = JSON.parse(req.body.data || '[]'); 
@@ -1134,14 +1136,23 @@ router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) 
                 if (field.constructor.name.includes('TextField')) field.setText(data.value);
                 else if (field.constructor.name.includes('CheckBox')) data.value ? field.check() : field.uncheck();
             } else if (data.xPct !== undefined && data.yPct !== undefined) {
-                // Free text overlay for scanned images
+                // Convert to a real interactive AcroForm field instead of just static text
                 const x = data.xPct * width;
-                const y = height - (data.yPct * height) - 10; // offset font size
-                page.drawText(data.value || '', { 
+                const fieldHeight = 24; // approximate height
+                const y = height - (data.yPct * height) - fieldHeight/2; 
+                const fieldWidth = data.width || 150;
+
+                const fieldName = data.name || `custom_${Date.now()}_${Math.random()}`;
+                const textField = form.createTextField(fieldName);
+                textField.setText(data.value || '');
+                textField.addToPage(page, { 
                     x, 
                     y, 
-                    size: 11,
-                    color: rgb(0.1, 0.1, 0.2) // dark slightly blueish ink
+                    width: fieldWidth, 
+                    height: fieldHeight,
+                    borderWidth: 1,
+                    borderColor: rgb(0.8, 0.8, 0.8),
+                    backgroundColor: rgb(0.95, 0.95, 1)
                 });
             }
         } catch (e) {}
@@ -1151,9 +1162,9 @@ router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) 
     const filename = `filled_${uuidv4()}.pdf`;
     const output = await saveOutput(resultBytes, filename);
     cleanup([req.file.path], 0);
-    res.json({ success: true, message: 'Form filled successfully!', output, processingTime: Date.now() - start });
+    res.json({ success: true, message: 'Form converted to a real fillable document successfully!', output, processingTime: Date.now() - start });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to process PDF: ' + err.message });
+    res.status(500).json({ error: 'Failed to process document: ' + err.message });
   }
 });
 

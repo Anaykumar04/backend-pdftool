@@ -3,7 +3,9 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 
-const uploadsDir = path.join(__dirname, '../uploads');
+const uploadsDir = process.env.NODE_ENV === 'production' 
+  ? path.join('/tmp', 'uploads') 
+  : path.join(__dirname, '../uploads');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
