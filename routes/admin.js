@@ -64,19 +64,23 @@ router.get('/stats', auth, async (req, res) => {
     }));
 
     // 7. Recent Files & Activity
-    const recentFiles = historyDocs.slice(0, 10).map(h => ({
-      id: h._id,
-      fileName: h.outputFile?.name || h.inputFiles?.[0]?.name || 'Unknown File',
-      user: h.userId?.name || 'Guest User',
-      toolUsed: h.operation.charAt(0).toUpperCase() + h.operation.slice(1).replace('-', ' '),
-      size: h.outputFile?.size || 0,
-      date: h.createdAt,
-      url: h.outputFile?.url
-    }));
+    const recentFiles = historyDocs.slice(0, 10).map(h => {
+      const op = h.operation || 'unknown';
+      return {
+        id: h._id,
+        fileName: h.outputFile?.name || h.inputFiles?.[0]?.name || 'Unknown File',
+        user: h.userId?.name || 'Guest User',
+        toolUsed: op.charAt(0).toUpperCase() + op.slice(1).replace('-', ' '),
+        size: h.outputFile?.size || 0,
+        date: h.createdAt,
+        url: h.outputFile?.url
+      };
+    });
 
     // Generate recent activity stream
     const recentActivity = historyDocs.slice(0, 10).map(h => {
-      const tool = h.operation.charAt(0).toUpperCase() + h.operation.slice(1).replace('-', ' ');
+      const op = h.operation || 'unknown';
+      const tool = op.charAt(0).toUpperCase() + op.slice(1).replace('-', ' ');
       const userName = h.userId?.name || 'Guest';
       const fileName = h.outputFile?.name || h.inputFiles?.[0]?.name || 'a file';
       return {
