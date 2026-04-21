@@ -1168,5 +1168,25 @@ router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) 
   }
 });
 
+// ==================== DOWNLOAD FILE ====================
+router.get('/download', (req, res) => {
+  try {
+    const fileUrl = req.query.url;
+    if (!fileUrl) return res.status(400).send('URL is required');
+    const filename = req.query.name || 'pdftoolkit.pdf';
+    
+    // fileUrl is typically /outputs/filename.pdf
+    const filePath = path.join(outputDir, path.basename(fileUrl));
+    
+    if (fs.existsSync(filePath)) {
+      res.download(filePath, filename);
+    } else {
+      res.status(404).send('File not found or has expired');
+    }
+  } catch (err) {
+    res.status(500).send('Error downloading file');
+  }
+});
+
 module.exports = router;
 

@@ -41,6 +41,16 @@ if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 app.use('/outputs', express.static(outputDir));
 
+// Direct Download Route
+app.get('/download/:filename', (req, res) => {
+  const filePath = path.join(outputDir, req.params.filename);
+  if (fs.existsSync(filePath)) {
+    res.download(filePath, 'pdftoolkit.pdf');
+  } else {
+    res.status(404).send('File not found or expired');
+  }
+});
+
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/pdf', require('./routes/pdf'));
