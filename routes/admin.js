@@ -2,9 +2,9 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const History = require('../models/History');
-const { protect } = require('../middleware/auth');
+const { protect, adminOnly } = require('../middleware/auth');
 
-router.get('/stats', protect, async (req, res) => {
+router.get('/stats', protect, adminOnly, async (req, res) => {
   try {
     // 1. Total Users
     const totalUsersCount = await User.countDocuments();

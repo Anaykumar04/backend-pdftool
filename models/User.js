@@ -6,7 +6,10 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true, minlength: 6 },
   avatar: { type: String, default: '' },
+  address: { type: String, default: '' },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
   plan: { type: String, enum: ['free', 'pro', 'enterprise'], default: 'free' },
+  subscriptionEnd: { type: Date, default: null },
   filesProcessed: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });
