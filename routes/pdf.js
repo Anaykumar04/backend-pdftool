@@ -11,6 +11,7 @@ const mammoth = require('mammoth');
 const translatte = require('translatte');
 const pdfParse = require('pdf-parse');
 const sharp = require('sharp');
+const cloudinary = require('../utils/cloudinary');
 
 const outputDir = process.env.NODE_ENV === 'production' 
   ? path.join('/tmp', 'outputs') 
@@ -112,12 +113,51 @@ async function getPdfBytes(file) {
   throw new Error(`File type ${file.mimetype} is currently not supported for this tool. Please use PDF, DOCX, JPG, or PNG.`);
 }
 
-// Helper: save output and return URL (auto-cleanup)
+// Helper: save output and return URL (uploads to Cloudinary)
 async function saveOutput(pdfBytes, filename) {
+  // Save locally first as a fallback/temp
   const outPath = path.join(outputDir, filename);
   fs.writeFileSync(outPath, pdfBytes);
-  cleanup([outPath]); // Schedule output deletion
-  return { filename, url: `/outputs/${filename}`, size: pdfBytes.length };
+  
+  try {
+    // Determine resource_type
+    let resource_type = 'auto';
+    if (filename.toLowerCase().endsWith('.pdf') || filename.toLowerCase().endsWith('.docx') || filename.toLowerCase().endsWith('.doc') || filename.toLowerCase().endsWith('.zip')) {
+      resource_type = 'raw';
+    }
+
+    // Upload to Cloudinary
+    const result = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: 'pdf-toolkit-outputs',
+          resource_type: resource_type,
+          public_id: filename.split('.')[0]
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      uploadStream.end(pdfBytes);
+    });
+
+    // Cleanup local file immediately since it's uploaded
+    cleanup([outPath], 0);
+
+    return { 
+      filename, 
+      url: result.secure_url, 
+      size: pdfBytes.length,
+      public_id: result.public_id,
+      cloud: true 
+    };
+  } catch (err) {
+    console.error('Cloudinary Upload Error:', err);
+    // Fallback to local URL if Cloudinary fails
+    cleanup([outPath]); // Schedule output deletion later
+    return { filename, url: `/outputs/${filename}`, size: pdfBytes.length, cloud: false };
+  }
 }
 
 // Helper: save history
@@ -799,9 +839,8 @@ router.post('/extract-images', upload.single('file'), async (req, res) => {
       output.on('close', resolve);
     });
 
-    const resultOutput = { filename: zipFilename, url: `/outputs/${zipFilename}`, size: fs.statSync(zipPath).size };
-    cleanup([req.file.path], 0);
-    cleanup([zipPath], 3600000); // 1 hour cleanup
+    const resultOutput = await saveOutput(fs.readFileSync(zipPath), zipFilename);
+    cleanup([req.file.path, zipPath], 0);
     
     res.json({ success: true, message: `Extracted ${imgCount} images`, output: resultOutput, processingTime: Date.now() - start });
   } catch (err) {
