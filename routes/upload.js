@@ -27,8 +27,13 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage: storage });
 
 // Upload File
-router.post('/file', protect, upload.single('file'), async (req, res) => {
-  try {
+router.post('/file', protect, (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      console.error('Multer/Cloudinary Error:', err);
+      return res.status(500).json({ error: 'Upload to Cloudinary failed. Please check your credentials.', details: err.message });
+    }
+    
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     
     res.json({
@@ -37,9 +42,7 @@ router.post('/file', protect, upload.single('file'), async (req, res) => {
       public_id: req.file.filename,
       resource_type: req.file.resource_type || 'auto'
     });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // Upload via URL
