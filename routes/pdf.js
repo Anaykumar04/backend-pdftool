@@ -121,19 +121,19 @@ async function saveOutput(pdfBytes, filename, req) {
   const outPath = path.join(outputDir, filename);
   fs.writeFileSync(outPath, pdfBytes);
   
+  const baseUrl = getBaseUrl(req);
+  const cleanDownloadUrl = `${baseUrl}/api/pdf/download/${filename}`;
+
   try {
-    // Determine resource_type
     let resource_type = 'auto';
-    if (filename.toLowerCase().endsWith('.pdf') || filename.toLowerCase().endsWith('.docx') || filename.toLowerCase().endsWith('.doc') || filename.toLowerCase().endsWith('.zip')) {
+    if (filename.toLowerCase().match(/\\.(pdf|docx|doc|zip)$/)) {
       resource_type = 'raw';
     }
 
-    // Check if Cloudinary is configured
     if (!process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY === 'your_api_key') {
       throw new Error('Cloudinary not configured');
     }
 
-    // Upload to Cloudinary
     const result = await new Promise((resolve, reject) => {
       const uploadStream = cloudinary.uploader.upload_stream(
         {
@@ -149,25 +149,22 @@ async function saveOutput(pdfBytes, filename, req) {
       uploadStream.end(pdfBytes);
     });
 
-    // Cleanup local file immediately since it's uploaded
     cleanup([outPath], 0);
 
     return { 
       filename, 
-      url: result.secure_url, 
+      url: cleanDownloadUrl, 
+      cloudinaryUrl: result.secure_url,
       size: pdfBytes.length,
       public_id: result.public_id,
       cloud: true 
     };
   } catch (err) {
-    // Fallback to local URL if Cloudinary fails or is not configured
-    cleanup([outPath]); // Schedule output deletion later
-    
-    const baseUrl = getBaseUrl(req);
+    cleanup([outPath], 3600000); // Keep local for an hour as fallback
       
     return { 
       filename, 
-      url: `${baseUrl}/outputs/${filename}`, 
+      url: cleanDownloadUrl, 
       size: pdfBytes.length, 
       cloud: false 
     };
@@ -1222,20 +1219,39 @@ router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) 
 });
 
 // ==================== DOWNLOAD FILE ====================
-router.get('/download', (req, res) => {
+router.get('/download/:filename', async (req, res) => {
   try {
-    const fileUrl = req.query.url;
-    if (!fileUrl) return res.status(400).send('URL is required');
-    const filename = req.query.name || 'pdftoolkit.pdf';
+    const filename = req.params.filename;
+    if (!filename) return res.status(400).send('Filename is required');
     
-    // fileUrl is typically /outputs/filename.pdf
-    const filePath = path.join(outputDir, path.basename(fileUrl));
-    
+    // Check local first (fallback)
+    const filePath = path.join(outputDir, filename);
     if (fs.existsSync(filePath)) {
-      res.download(filePath, filename);
-    } else {
-      res.status(404).send('File not found or has expired');
+      return res.download(filePath, filename);
     }
+
+    // If not local, stream from Cloudinary
+    if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      return res.status(404).send('File not found or has expired');
+    }
+
+    // Construct Cloudinary raw URL
+    const cloudinaryUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/pdf-toolkit-outputs/${filename}`;
+    
+    // Fetch the file from Cloudinary and pipe to response
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(cloudinaryUrl);
+    
+    if (!response.ok) {
+      return res.status(404).send('File not found on cloud storage or has expired');
+    }
+
+    // Set headers to force download and set correct filename
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/pdf');
+    res.setHeader('Content-Length', response.headers.get('content-length'));
+
+    response.body.pipe(res);
   } catch (err) {
     res.status(500).send('Error downloading file');
   }

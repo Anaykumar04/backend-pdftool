@@ -113,4 +113,40 @@ router.post('/url', protect, async (req, res) => {
   }
 });
 
+// Download File via Proxy
+router.get('/download/:public_id', async (req, res) => {
+  try {
+    const publicId = req.params.public_id;
+    if (!publicId) return res.status(400).send('Public ID is required');
+
+    if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      return res.status(404).send('Cloudinary not configured');
+    }
+
+    // Determine if it has extension (like .pdf)
+    const hasExtension = publicId.includes('.');
+    const filename = hasExtension ? publicId : `${publicId}.pdf`; // Assume PDF if no extension
+
+    // Cloudinary raw URL format for pdf-toolkit folder
+    const cloudinaryUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/pdf-toolkit/${publicId}`;
+    
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch(cloudinaryUrl);
+    
+    if (!response.ok) {
+      // Try image upload URL if raw fails
+      const imageUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/fl_attachment/pdf-toolkit/${publicId}`;
+      return res.redirect(imageUrl);
+    }
+
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', response.headers.get('content-type') || 'application/octet-stream');
+    res.setHeader('Content-Length', response.headers.get('content-length'));
+
+    response.body.pipe(res);
+  } catch (err) {
+    res.status(500).send('Error downloading file');
+  }
+});
+
 module.exports = router;
