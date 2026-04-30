@@ -12,6 +12,9 @@ router.get('/stats', protect, adminOnly, async (req, res) => {
     // 2. Total Files Processed (From History)
     const historyDocs = await History.find().populate('userId', 'name').sort({ createdAt: -1 });
     const totalFilesProcessed = historyDocs.length;
+
+    // Users List for Dashboard Tab
+    const usersList = await User.find({}, '-password').sort({ createdAt: -1 });
     
     // 3. Total Conversions
     const conversionOperations = ['pdf-to-jpg', 'jpg-to-pdf', 'pdf-to-word', 'word-to-pdf', 'pdf-to-excel'];
@@ -99,7 +102,9 @@ router.get('/stats', protect, adminOnly, async (req, res) => {
       filesProcessedOverview,
       topToolsUsage,
       recentFiles,
-      recentActivity
+      recentActivity,
+      usersList,
+      allFiles: recentFiles // use recentFiles for the files tab or we can map all
     });
   } catch (error) {
     console.error('Error fetching admin stats:', error);

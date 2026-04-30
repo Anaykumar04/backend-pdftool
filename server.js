@@ -37,9 +37,11 @@ const outputDir = process.env.NODE_ENV === 'production'
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-// Static file serving
-app.use('/uploads', express.static(uploadsDir));
-app.use('/outputs', express.static(outputDir));
+const { getBaseUrl } = require('./utils/helpers');
+
+// Static file serving with CORS for cross-origin image loading
+app.use('/uploads', cors(), express.static(uploadsDir));
+app.use('/outputs', cors(), express.static(outputDir));
 
 // Direct Download Route
 app.get('/download/:filename', (req, res) => {
@@ -73,8 +75,8 @@ mongoose.connect(process.env.MONGO_URI)
 
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, '127.0.0.1', () => {
-    console.log(`🚀 PDF Editor Server running on http://127.0.0.1:${PORT}`);
+  app.listen(PORT, () => {
+    console.log(`🚀 PDF Editor Server running on http://localhost:${PORT}`);
   });
 }
 

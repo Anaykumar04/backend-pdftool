@@ -113,8 +113,10 @@ async function getPdfBytes(file) {
   throw new Error(`File type ${file.mimetype} is currently not supported for this tool. Please use PDF, DOCX, JPG, or PNG.`);
 }
 
+const { getBaseUrl } = require('../utils/helpers');
+
 // Helper: save output and return URL (uploads to Cloudinary)
-async function saveOutput(pdfBytes, filename) {
+async function saveOutput(pdfBytes, filename, req) {
   // Save locally first as a fallback/temp
   const outPath = path.join(outputDir, filename);
   fs.writeFileSync(outPath, pdfBytes);
@@ -124,6 +126,11 @@ async function saveOutput(pdfBytes, filename) {
     let resource_type = 'auto';
     if (filename.toLowerCase().endsWith('.pdf') || filename.toLowerCase().endsWith('.docx') || filename.toLowerCase().endsWith('.doc') || filename.toLowerCase().endsWith('.zip')) {
       resource_type = 'raw';
+    }
+
+    // Check if Cloudinary is configured
+    if (!process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_API_KEY === 'your_api_key') {
+      throw new Error('Cloudinary not configured');
     }
 
     // Upload to Cloudinary
@@ -153,10 +160,17 @@ async function saveOutput(pdfBytes, filename) {
       cloud: true 
     };
   } catch (err) {
-    console.error('Cloudinary Upload Error:', err);
-    // Fallback to local URL if Cloudinary fails
+    // Fallback to local URL if Cloudinary fails or is not configured
     cleanup([outPath]); // Schedule output deletion later
-    return { filename, url: `/outputs/${filename}`, size: pdfBytes.length, cloud: false };
+    
+    const baseUrl = getBaseUrl(req);
+      
+    return { 
+      filename, 
+      url: `${baseUrl}/outputs/${filename}`, 
+      size: pdfBytes.length, 
+      cloud: false 
+    };
   }
 }
 
@@ -200,7 +214,7 @@ router.post('/merge', optionalAuth, upload.array('files', 20), async (req, res) 
     }
     const pdfBytes = await mergedPdf.save();
     const filename = `merged_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     const processingTime = Date.now() - start;
     await saveHistory(
       req.user?._id, req.body.sessionId, 'merge',
@@ -233,7 +247,7 @@ router.post('/split', optionalAuth, upload.single('file'), async (req, res) => {
         singlePdf.addPage(page);
         const bytes = await singlePdf.save();
         const filename = `page_${i + 1}_${uuidv4()}.pdf`;
-        const output = await saveOutput(bytes, filename);
+        const output = await saveOutput(bytes, filename, req);
         outputs.push({ page: i + 1, ...output });
       }
     } else if (splitMode === 'range') {
@@ -248,7 +262,7 @@ router.post('/split', optionalAuth, upload.single('file'), async (req, res) => {
         pages.forEach(p => rangePdf.addPage(p));
         const bytes = await rangePdf.save();
         const filename = `range_${range.from}_to_${range.to}_${uuidv4()}.pdf`;
-        const output = await saveOutput(bytes, filename);
+        const output = await saveOutput(bytes, filename, req);
         outputs.push({ range: `${range.from}-${range.to}`, ...output });
       }
     }
@@ -270,7 +284,7 @@ router.post('/compress', optionalAuth, upload.single('file'), async (req, res) =
     // Re-save the PDF (pdf-lib applies basic optimization)
     const compressedBytes = await pdf.save({ useObjectStreams: true });
     const filename = `compressed_${uuidv4()}.pdf`;
-    const output = await saveOutput(compressedBytes, filename);
+    const output = await saveOutput(compressedBytes, filename, req);
     const originalSize = req.file.size;
     const compressedSize = compressedBytes.length;
     const reduction = Math.round((1 - compressedSize / originalSize) * 100);
@@ -313,7 +327,7 @@ router.post('/rotate', optionalAuth, upload.single('file'), async (req, res) => 
 
     const rotatedBytes = await pdf.save();
     const filename = `rotated_${uuidv4()}.pdf`;
-    const output = await saveOutput(rotatedBytes, filename);
+    const output = await saveOutput(rotatedBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: `PDF rotated ${rotation}°`, output, processingTime: Date.now() - start });
   } catch (err) {
@@ -356,7 +370,7 @@ router.post('/watermark', optionalAuth, upload.single('file'), async (req, res) 
 
     const watermarkedBytes = await pdf.save();
     const filename = `watermarked_${uuidv4()}.pdf`;
-    const output = await saveOutput(watermarkedBytes, filename);
+    const output = await saveOutput(watermarkedBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Watermark added successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -376,7 +390,7 @@ router.post('/protect', optionalAuth, upload.single('file'), async (req, res) =>
     pdf.setSubject('Password Protected');
     const protectedBytes = await pdf.save();
     const filename = `protected_${uuidv4()}.pdf`;
-    const output = await saveOutput(protectedBytes, filename);
+    const output = await saveOutput(protectedBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'PDF protection applied', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -402,7 +416,7 @@ router.post('/reorder', optionalAuth, upload.single('file'), async (req, res) =>
 
     const reorderedBytes = await reorderedPdf.save();
     const filename = `reordered_${uuidv4()}.pdf`;
-    const output = await saveOutput(reorderedBytes, filename);
+    const output = await saveOutput(reorderedBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Pages reordered successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -460,7 +474,7 @@ router.post('/image-to-pdf', optionalAuth, upload.array('files', 20), async (req
     }
     const pdfBytes = await pdfDoc.save();
     const filename = `images_to_pdf_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     const processingTime = Date.now() - start;
     await saveHistory(
       req.user?._id, req.body.sessionId, 'image-to-pdf',
@@ -483,7 +497,7 @@ router.post('/extract-text', optionalAuth, upload.single('file'), async (req, re
     const data = await pdfParse(pdfBytes);
     const text = data.text;
     const filename = `text_${uuidv4()}.txt`;
-    const output = await saveOutput(Buffer.from(text), filename);
+    const output = await saveOutput(Buffer.from(text), filename, req);
     const processingTime = Date.now() - start;
     await saveHistory(
       req.user?._id, req.body.sessionId, 'extract-text',
@@ -504,7 +518,7 @@ router.post('/word-to-pdf', optionalAuth, upload.single('file'), async (req, res
   try {
     const pdfBytes = await getPdfBytes(req.file);
     const filename = `word_to_pdf_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     const processingTime = Date.now() - start;
     await saveHistory(
       req.user?._id, req.body.sessionId, 'word-to-pdf',
@@ -541,7 +555,7 @@ router.post('/delete-pages', optionalAuth, upload.single('file'), async (req, re
 
     const resultBytes = await newPdf.save();
     const filename = `deleted_pages_${uuidv4()}.pdf`;
-    const output = await saveOutput(resultBytes, filename);
+    const output = await saveOutput(resultBytes, filename, req);
     
     cleanup([req.file.path], 0);
     res.json({ success: true, message: `Deleted ${pagesToDelete.length} pages`, output, processingTime: Date.now() - start });
@@ -581,7 +595,7 @@ router.post('/page-numbers', optionalAuth, upload.single('file'), async (req, re
 
     const numberedBytes = await pdf.save();
     const filename = `numbered_${uuidv4()}.pdf`;
-    const output = await saveOutput(numberedBytes, filename);
+    const output = await saveOutput(numberedBytes, filename, req);
     cleanup([req.file.path], 1000); // give it a sec
     res.json({ success: true, message: 'Page numbers added successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -635,7 +649,7 @@ router.post('/add-stamp', optionalAuth, upload.single('file'), async (req, res) 
 
     const stampedBytes = await pdf.save();
     const filename = `stamped_${uuidv4()}.pdf`;
-    const output = await saveOutput(stampedBytes, filename);
+    const output = await saveOutput(stampedBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Stamp added successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -667,7 +681,7 @@ router.post('/json-to-pdf', optionalAuth, upload.single('file'), async (req, res
 
     const pdfBytes = await pdfDoc.save();
     const filename = `json_to_pdf_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'JSON converted to PDF successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -699,7 +713,7 @@ router.post('/xml-to-pdf', optionalAuth, upload.single('file'), async (req, res)
 
     const pdfBytes = await pdfDoc.save();
     const filename = `xml_to_pdf_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'XML converted to PDF successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -736,7 +750,7 @@ router.post('/email-to-pdf', optionalAuth, upload.single('file'), async (req, re
 
     const pdfBytes = await pdfDoc.save();
     const filename = `email_to_pdf_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Email converted to PDF successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -771,7 +785,7 @@ router.post('/csv-to-pdf', optionalAuth, upload.single('file'), async (req, res)
 
     const pdfBytes = await pdfDoc.save();
     const filename = `csv_to_pdf_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'CSV converted to PDF successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -839,7 +853,7 @@ router.post('/extract-images', upload.single('file'), async (req, res) => {
       output.on('close', resolve);
     });
 
-    const resultOutput = await saveOutput(fs.readFileSync(zipPath), zipFilename);
+    const resultOutput = await saveOutput(fs.readFileSync(zipPath), zipFilename, req);
     cleanup([req.file.path, zipPath], 0);
     
     res.json({ success: true, message: `Extracted ${imgCount} images`, output: resultOutput, processingTime: Date.now() - start });
@@ -886,7 +900,7 @@ router.post('/sign-image', optionalAuth, upload.fields([{ name: 'pdf', maxCount:
 
     const signedBytes = await pdfDoc.save();
     const filename = `signed_${uuidv4()}.pdf`;
-    const output = await saveOutput(signedBytes, filename);
+    const output = await saveOutput(signedBytes, filename, req);
     
     cleanup([pdfFile.path, sigFile.path], 0);
     res.json({ success: true, message: 'Signed successfully', output, processingTime: Date.now() - start });
@@ -946,7 +960,7 @@ router.post('/translate', upload.single('file'), async (req, res) => {
 
     const pdfBytes = await pdfDoc.save();
     const filename = `translated_${toLanguage}_${uuidv4()}.pdf`;
-    const output = await saveOutput(pdfBytes, filename);
+    const output = await saveOutput(pdfBytes, filename, req);
     
     cleanup([req.file.path], 0);
     res.json({ success: true, message: `Translated to ${toLanguage} successfully`, output, processingTime: Date.now() - start });
@@ -1023,7 +1037,7 @@ router.post('/add-rubber-stamp', optionalAuth, upload.single('file'), async (req
 
     const resultBytes = await pdfDoc.save();
     const filename = `stamped_${uuidv4()}.pdf`;
-    const output = await saveOutput(resultBytes, filename);
+    const output = await saveOutput(resultBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Professional stamp added successfully', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -1057,7 +1071,7 @@ router.post('/background-color', optionalAuth, upload.single('file'), async (req
 
     const resultBytes = await newPdf.save();
     const filename = `bg_${uuidv4()}.pdf`;
-    const output = await saveOutput(resultBytes, filename);
+    const output = await saveOutput(resultBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Background updated', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -1088,7 +1102,7 @@ router.post('/edit-pdf', optionalAuth, upload.single('file'), async (req, res) =
 
     const editedBytes = await pdfDoc.save();
     const filename = `edited_${uuidv4()}.pdf`;
-    const output = await saveOutput(editedBytes, filename);
+    const output = await saveOutput(editedBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Edits applied', output, processingTime: Date.now() - start });
   } catch (err) {
@@ -1139,7 +1153,7 @@ router.post('/detect-fields', optionalAuth, upload.single('file'), async (req, r
 
     const resultBytes = await pdfDoc.save();
     const filename = `fillable_scanned_${uuidv4()}.pdf`;
-    const output = await saveOutput(resultBytes, filename);
+    const output = await saveOutput(resultBytes, filename, req);
 
     cleanup([req.file.path], 0);
     res.json({ 
@@ -1199,7 +1213,7 @@ router.post('/fill-form', optionalAuth, upload.single('file'), async (req, res) 
 
     const resultBytes = await pdfDoc.save();
     const filename = `filled_${uuidv4()}.pdf`;
-    const output = await saveOutput(resultBytes, filename);
+    const output = await saveOutput(resultBytes, filename, req);
     cleanup([req.file.path], 0);
     res.json({ success: true, message: 'Form converted to a real fillable document successfully!', output, processingTime: Date.now() - start });
   } catch (err) {
