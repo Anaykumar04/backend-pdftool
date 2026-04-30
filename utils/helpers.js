@@ -10,4 +10,4 @@ const getBaseUrl = (req) => {
   return `${protocol}://${host}`;
 };
 
-module.exports = { getBaseUrl };
+module.exports = { getBaseUrl }; // Waking up nodemon
