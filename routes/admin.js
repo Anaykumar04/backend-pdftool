@@ -71,7 +71,7 @@ router.get('/stats', protect, adminOnly, async (req, res) => {
       const op = h.operation || 'unknown';
       return {
         id: h._id,
-        fileName: h.outputFile?.name || h.inputFiles?.[0]?.name || 'Unknown File',
+        fileName: h.outputFile?.filename || h.outputFile?.name || h.inputFiles?.[0]?.name || 'Unknown File',
         user: h.userId?.name || 'Guest User',
         toolUsed: op.charAt(0).toUpperCase() + op.slice(1).replace('-', ' '),
         size: h.outputFile?.size || 0,
@@ -85,7 +85,7 @@ router.get('/stats', protect, adminOnly, async (req, res) => {
       const op = h.operation || 'unknown';
       const tool = op.charAt(0).toUpperCase() + op.slice(1).replace('-', ' ');
       const userName = h.userId?.name || 'Guest';
-      const fileName = h.outputFile?.name || h.inputFiles?.[0]?.name || 'a file';
+      const fileName = h.outputFile?.filename || h.outputFile?.name || h.inputFiles?.[0]?.name || 'a file';
       return {
         id: h._id,
         user: userName,
