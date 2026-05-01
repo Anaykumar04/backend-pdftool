@@ -31,6 +31,7 @@ router.post('/register', async (req, res) => {
         role: user.role,
         plan: user.plan,
         subscriptionEnd: user.subscriptionEnd,
+        isVerified: user.isVerified,
         createdAt: user.createdAt
       }
     });
@@ -60,6 +61,7 @@ router.post('/login', async (req, res) => {
         role: user.role,
         plan: user.plan,
         subscriptionEnd: user.subscriptionEnd,
+        isVerified: user.isVerified,
         createdAt: user.createdAt
       }
     });
@@ -93,6 +95,64 @@ router.put('/update', protect, async (req, res) => {
         plan: user.plan,
         subscriptionEnd: user.subscriptionEnd,
         createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send OTP
+router.post('/send-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+    let user = await User.findOne({ email });
+    
+    // If user doesn't exist, we might be in a 'register-during-google-auth' flow
+    // But for simplicity, let's assume they might need to register first or we create a skeleton
+    if (!user) {
+      return res.status(404).json({ error: 'User not found. Please register first.' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.otp = otp;
+    user.otpExpires = Date.now() + 10 * 60 * 1000; // 10 mins
+    await user.save();
+
+    // In a real app, send email here. For now, we simulate.
+    console.log(`OTP for ${email}: ${otp}`);
+    
+    res.json({ success: true, message: 'OTP sent to email' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Verify OTP
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    const user = await User.findOne({ email });
+
+    if (!user || user.otp !== otp || user.otpExpires < Date.now()) {
+      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    }
+
+    user.isVerified = true;
+    user.otp = null;
+    user.otpExpires = null;
+    await user.save();
+
+    res.json({ 
+      success: true, 
+      message: 'Email verified successfully',
+      token: generateToken(user._id),
+      user: { 
+        id: user._id, 
+        name: user.name, 
+        email: user.email, 
+        role: user.role,
+        isVerified: user.isVerified
       }
     });
   } catch (err) {

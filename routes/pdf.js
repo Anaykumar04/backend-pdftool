@@ -5,7 +5,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { PDFDocument, degrees, rgb, StandardFonts, PDFName } = require('pdf-lib');
 const upload = require('../middleware/upload');
-const { optionalAuth } = require('../middleware/auth');
+const { protect, optionalAuth, verifiedOnly } = require('../middleware/auth');
 const History = require('../models/History');
 const mammoth = require('mammoth');
 const translatte = require('translatte');
@@ -196,7 +196,7 @@ function cleanup(files, delayMs = 3600000) {
 }
 
 // ==================== MERGE PDF ====================
-router.post('/merge', optionalAuth, upload.array('files', 20), async (req, res) => {
+router.post('/merge', protect, verifiedOnly, upload.array('files', 20), async (req, res) => {
   const start = Date.now();
   if (!req.files?.length || req.files.length < 2) {
     return res.status(400).json({ error: 'Please upload at least 2 files (PDF, Image, or Word) to merge' });
@@ -226,7 +226,7 @@ router.post('/merge', optionalAuth, upload.array('files', 20), async (req, res) 
 });
 
 // ==================== SPLIT PDF ====================
-router.post('/split', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/split', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
   try {
@@ -272,7 +272,7 @@ router.post('/split', optionalAuth, upload.single('file'), async (req, res) => {
 });
 
 // ==================== COMPRESS PDF ====================
-router.post('/compress', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/compress', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
   try {
@@ -301,7 +301,7 @@ router.post('/compress', optionalAuth, upload.single('file'), async (req, res) =
 });
 
 // ==================== ROTATE PDF ====================
-router.post('/rotate', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/rotate', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
   try {
@@ -333,7 +333,7 @@ router.post('/rotate', optionalAuth, upload.single('file'), async (req, res) => 
 });
 
 // ==================== ADD WATERMARK ====================
-router.post('/watermark', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/watermark', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
   try {
@@ -376,7 +376,7 @@ router.post('/watermark', optionalAuth, upload.single('file'), async (req, res) 
 });
 
 // ==================== PROTECT PDF ====================
-router.post('/protect', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/protect', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
   try {
@@ -396,7 +396,7 @@ router.post('/protect', optionalAuth, upload.single('file'), async (req, res) =>
 });
 
 // ==================== REORDER PAGES ====================
-router.post('/reorder', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/reorder', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
   try {
@@ -451,7 +451,7 @@ router.post('/info', upload.single('file'), async (req, res) => {
 });
 
 // ==================== IMAGE TO PDF ====================
-router.post('/image-to-pdf', optionalAuth, upload.array('files', 20), async (req, res) => {
+router.post('/image-to-pdf', protect, verifiedOnly, upload.array('files', 20), async (req, res) => {
   const start = Date.now();
   if (!req.files?.length) return res.status(400).json({ error: 'Please upload at least one image' });
   try {
@@ -486,7 +486,7 @@ router.post('/image-to-pdf', optionalAuth, upload.array('files', 20), async (req
 });
 
 // ==================== PDF TO TEXT ====================
-router.post('/extract-text', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/extract-text', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF, Image, or Word file' });
   try {
@@ -509,7 +509,7 @@ router.post('/extract-text', optionalAuth, upload.single('file'), async (req, re
 });
 
 // ==================== WORD TO PDF ====================
-router.post('/word-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/word-to-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a Word file' });
   try {
@@ -530,7 +530,7 @@ router.post('/word-to-pdf', optionalAuth, upload.single('file'), async (req, res
 });
 
 // ==================== DELETE PAGES ====================
-router.post('/delete-pages', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/delete-pages', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
   try {
@@ -562,7 +562,7 @@ router.post('/delete-pages', optionalAuth, upload.single('file'), async (req, re
 });
 
 // ==================== ADD PAGE NUMBERS ====================
-router.post('/page-numbers', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/page-numbers', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
   try {
@@ -601,7 +601,7 @@ router.post('/page-numbers', optionalAuth, upload.single('file'), async (req, re
 });
 
 // ==================== ADD STAMP ====================
-router.post('/add-stamp', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/add-stamp', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
   try {
@@ -655,7 +655,7 @@ router.post('/add-stamp', optionalAuth, upload.single('file'), async (req, res) 
 });
 
 // ==================== JSON TO PDF ====================
-router.post('/json-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/json-to-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a JSON file' });
   try {
@@ -687,7 +687,7 @@ router.post('/json-to-pdf', optionalAuth, upload.single('file'), async (req, res
 });
 
 // ==================== XML TO PDF ====================
-router.post('/xml-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/xml-to-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload an XML file' });
   try {
@@ -719,7 +719,7 @@ router.post('/xml-to-pdf', optionalAuth, upload.single('file'), async (req, res)
 });
 
 // ==================== EMAIL TO PDF ====================
-router.post('/email-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/email-to-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload an Email file (.eml or .txt)' });
   try {
@@ -756,7 +756,7 @@ router.post('/email-to-pdf', optionalAuth, upload.single('file'), async (req, re
 });
 
 // ==================== CSV TO PDF ====================
-router.post('/csv-to-pdf', optionalAuth, upload.single('file'), async (req, res) => {
+router.post('/csv-to-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: 'Please upload a CSV file' });
   try {

@@ -37,5 +37,13 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-module.exports = { protect, optionalAuth, adminOnly };
+const verifiedOnly = (req, res, next) => {
+  if (req.user && req.user.isVerified) {
+    next();
+  } else {
+    res.status(403).json({ error: 'Please verify your email to use this tool' });
+  }
+};
+
+module.exports = { protect, optionalAuth, adminOnly, verifiedOnly };
 

@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const cloudinary = require('../utils/cloudinary');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const { protect } = require('../middleware/auth');
+const { protect, verifiedOnly } = require('../middleware/auth');
 
 const isCloudinaryConfigured = process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_KEY !== 'your_api_key';
 
@@ -43,7 +43,7 @@ const uploadLocal = multer({ storage: localStorage });
 const { getBaseUrl } = require('../utils/helpers');
 
 // Upload File
-router.post('/file', protect, (req, res) => {
+router.post('/file', protect, verifiedOnly, (req, res) => {
   const upload = isCloudinaryConfigured ? uploadCloud.single('file') : uploadLocal.single('file');
   
   upload(req, res, (err) => {
@@ -76,7 +76,7 @@ router.post('/file', protect, (req, res) => {
 });
 
 // Upload via URL
-router.post('/url', protect, async (req, res) => {
+router.post('/url', protect, verifiedOnly, async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL is required' });

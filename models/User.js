@@ -11,6 +11,9 @@ const userSchema = new mongoose.Schema({
   plan: { type: String, enum: ['free', 'pro', 'enterprise'], default: 'free' },
   subscriptionEnd: { type: Date, default: null },
   filesProcessed: { type: Number, default: 0 },
+  isVerified: { type: Boolean, default: false },
+  otp: { type: String, default: null },
+  otpExpires: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 
