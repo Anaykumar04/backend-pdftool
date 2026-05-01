@@ -13,14 +13,14 @@ const app = express();
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 1000,
   message: { error: 'Too many requests, please try again later.' }
 });
 
 // Middleware
 app.use(limiter);
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' ? true : ['http://localhost:5173', 'http://localhost:3000'],
+  origin: true,
   credentials: true
 }));
 app.use(express.json({ limit: '50mb' }));
