@@ -3,6 +3,8 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { protect } = require('../middleware/auth');
+const { OAuth2Client } = require('google-auth-library');
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
@@ -163,6 +165,52 @@ router.post('/verify-otp', async (req, res) => {
 // Get current user
 router.get('/me', protect, (req, res) => {
   res.json({ success: true, user: req.user });
+});
+
+// Google Auth
+router.post('/google', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token is required' });
+
+    const ticket = await client.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const { name, email, picture } = ticket.getPayload();
+
+    let user = await User.findOne({ email });
+    if (!user) {
+      // Admin whitelist (two or three members)
+      const adminEmails = ['anay_kumar@gmail.com', 'admin@pdftoolkit.com'];
+      const role = adminEmails.includes(email.toLowerCase()) ? 'admin' : 'user';
+      
+      user = await User.create({
+        name,
+        email,
+        avatar: picture,
+        role,
+        isVerified: true,
+        password: Math.random().toString(36).slice(-8) // Random password
+      });
+    }
+
+    res.json({
+      success: true,
+      token: generateToken(user._id),
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        role: user.role,
+        isVerified: user.isVerified
+      }
+    });
+  } catch (err) {
+    console.error('Google Auth Error:', err);
+    res.status(400).json({ error: 'Google authentication failed' });
+  }
 });
 
 module.exports = router;
