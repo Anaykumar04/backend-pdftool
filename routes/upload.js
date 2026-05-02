@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const cloudinary = require('../utils/cloudinary');
-const { CloudinaryStorage } = require('multer-storage-cloudinary-v2');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const { protect, verifiedOnly } = require('../middleware/auth');
 
 const isCloudinaryConfigured = process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_KEY !== 'your_api_key';
