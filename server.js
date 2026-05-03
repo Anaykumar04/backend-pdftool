@@ -42,8 +42,6 @@ const outputDir = process.env.NODE_ENV === 'production'
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-const { getBaseUrl } = require('./utils/helpers');
-
 // Static file serving with CORS for cross-origin image loading
 app.use('/uploads', cors(), express.static(uploadsDir));
 app.use('/outputs', cors(), express.static(outputDir));
