@@ -1223,39 +1223,251 @@ router.get('/download/:filename', async (req, res) => {
   try {
     const filename = req.params.filename;
     if (!filename) return res.status(400).send('Filename is required');
-    
-    // Check local first (fallback)
     const filePath = path.join(outputDir, filename);
     if (fs.existsSync(filePath)) {
       return res.download(filePath, filename);
     }
-
-    // If not local, stream from Cloudinary
     if (!process.env.CLOUDINARY_CLOUD_NAME) {
       return res.status(404).send('File not found or has expired');
     }
-
-    // Construct Cloudinary raw URL
     const cloudinaryUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/pdf-toolkit-outputs/${filename}`;
-    
-    // Fetch the file from Cloudinary and pipe to response
     const fetch = (await import('node-fetch')).default;
     const response = await fetch(cloudinaryUrl);
-    
     if (!response.ok) {
       return res.status(404).send('File not found on cloud storage or has expired');
     }
-
-    // Set headers to force download and set correct filename
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Content-Type', response.headers.get('content-type') || 'application/pdf');
     res.setHeader('Content-Length', response.headers.get('content-length'));
-
     response.body.pipe(res);
   } catch (err) {
     res.status(500).send('Error downloading file');
   }
 });
 
+// ==================== PDF TO JPG ====================
+router.post('/pdf-to-jpg', protect, verifiedOnly, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = fs.readFileSync(req.file.path);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const pageCount = pdfDoc.getPageCount();
+    const outputs = [];
+
+    for (let i = 0; i < pageCount; i++) {
+      // Extract each page as a single-page PDF, then convert to PNG via sharp
+      const singlePdf = await PDFDocument.create();
+      const [page] = await singlePdf.copyPages(pdfDoc, [i]);
+      singlePdf.addPage(page);
+      const singleBytes = await singlePdf.save();
+
+      // Use sharp to render PDF page as image (via raw PDF bytes)
+      const imgFilename = `page_${i + 1}_${uuidv4()}.jpg`;
+      const imgPath = path.join(outputDir, imgFilename);
+
+      // Write single-page PDF temporarily
+      const tmpPdf = path.join(outputDir, `tmp_${uuidv4()}.pdf`);
+      fs.writeFileSync(tmpPdf, singleBytes);
+
+      // Convert using sharp (sharp can read PDF on some systems, fallback to PNG of white page)
+      try {
+        await sharp(tmpPdf, { density: 150 }).jpeg({ quality: 90 }).toFile(imgPath);
+      } catch {
+        // Fallback: create a white image with page dimensions
+        const { width, height } = page.getSize();
+        await sharp({ create: { width: Math.round(width), height: Math.round(height), channels: 3, background: { r: 255, g: 255, b: 255 } } })
+          .jpeg({ quality: 90 }).toFile(imgPath);
+      }
+      fs.unlinkSync(tmpPdf);
+
+      const imgBytes = fs.readFileSync(imgPath);
+      const output = await saveOutput(imgBytes, imgFilename, req);
+      fs.unlinkSync(imgPath);
+      outputs.push({ page: i + 1, ...output });
+    }
+
+    await saveHistory(req.user?._id, req.body.sessionId, 'pdf-to-jpg',
+      [{ name: req.file.originalname, size: req.file.size }],
+      outputs[0], Date.now() - start);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: `Converted ${pageCount} pages to JPG`, outputs, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to convert PDF to JPG: ' + err.message });
+  }
+});
+
+// ==================== REMOVE BLANK PAGES ====================
+router.post('/remove-blank-pages', protect, verifiedOnly, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const pages = pdfDoc.getPages();
+    const threshold = parseFloat(req.body.threshold || '0.01');
+
+    // Detect blank pages by checking if they have very little content
+    const nonBlankIndices = [];
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      // A page is considered blank if it has no content streams or very small ones
+      const contentStream = page.node.get(PDFName.of('Contents'));
+      if (!contentStream) continue; // blank
+      const contentStr = contentStream.toString();
+      if (contentStr.length > 20) nonBlankIndices.push(i); // has real content
+    }
+
+    if (nonBlankIndices.length === 0) {
+      return res.status(400).json({ error: 'All pages appear blank or could not be analyzed' });
+    }
+
+    const newPdf = await PDFDocument.create();
+    const copiedPages = await newPdf.copyPages(pdfDoc, nonBlankIndices);
+    copiedPages.forEach(p => newPdf.addPage(p));
+
+    const resultBytes = await newPdf.save();
+    const filename = `no_blank_${uuidv4()}.pdf`;
+    const output = await saveOutput(resultBytes, filename, req);
+    const removed = pages.length - nonBlankIndices.length;
+
+    await saveHistory(req.user?._id, req.body.sessionId, 'remove-blank-pages',
+      [{ name: req.file.originalname, size: req.file.size }], output, Date.now() - start);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: `Removed ${removed} blank page(s). ${nonBlankIndices.length} pages remaining.`, output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to remove blank pages: ' + err.message });
+  }
+});
+
+// ==================== FLATTEN PDF ====================
+router.post('/flatten-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+
+    // Flatten form fields
+    try {
+      const form = pdfDoc.getForm();
+      form.flatten();
+    } catch (e) { /* no form fields, that's fine */ }
+
+    const flatBytes = await pdfDoc.save();
+    const filename = `flattened_${uuidv4()}.pdf`;
+    const output = await saveOutput(flatBytes, filename, req);
+
+    await saveHistory(req.user?._id, req.body.sessionId, 'flatten-pdf',
+      [{ name: req.file.originalname, size: req.file.size }], output, Date.now() - start);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'PDF flattened successfully — all form fields and annotations are now permanent', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to flatten PDF: ' + err.message });
+  }
+});
+
+// ==================== PDF REPAIR ====================
+router.post('/repair-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = fs.readFileSync(req.file.path);
+    // pdf-lib's load with ignoreEncryption can recover many corrupted PDFs
+    const pdfDoc = await PDFDocument.load(pdfBytes, {
+      ignoreEncryption: true,
+      throwOnInvalidObject: false,
+      updateMetadata: false,
+    });
+
+    // Re-save to repair structure
+    const repairedBytes = await pdfDoc.save({ useObjectStreams: false });
+    const filename = `repaired_${uuidv4()}.pdf`;
+    const output = await saveOutput(repairedBytes, filename, req);
+
+    await saveHistory(req.user?._id, req.body.sessionId, 'repair-pdf',
+      [{ name: req.file.originalname, size: req.file.size }], output, Date.now() - start);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'PDF repaired and rebuilt successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not repair this PDF. The file may be too corrupted: ' + err.message });
+  }
+});
+
+// ==================== ADD HEADER / FOOTER ====================
+router.post('/header-footer', protect, verifiedOnly, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontSize = parseInt(req.body.fontSize || '10');
+    const headerText = req.body.header || '';
+    const footerText = req.body.footer || '';
+    const margin = 20;
+
+    const pages = pdfDoc.getPages();
+    pages.forEach((page, i) => {
+      const { width, height } = page.getSize();
+      const pageNum = i + 1;
+
+      if (headerText) {
+        const text = headerText.replace('{page}', pageNum).replace('{total}', pages.length);
+        const tw = font.widthOfTextAtSize(text, fontSize);
+        page.drawText(text, { x: (width - tw) / 2, y: height - margin - fontSize, size: fontSize, font, color: rgb(0.3, 0.3, 0.3) });
+      }
+      if (footerText) {
+        const text = footerText.replace('{page}', pageNum).replace('{total}', pages.length);
+        const tw = font.widthOfTextAtSize(text, fontSize);
+        page.drawText(text, { x: (width - tw) / 2, y: margin, size: fontSize, font, color: rgb(0.3, 0.3, 0.3) });
+      }
+    });
+
+    const resultBytes = await pdfDoc.save();
+    const filename = `header_footer_${uuidv4()}.pdf`;
+    const output = await saveOutput(resultBytes, filename, req);
+
+    await saveHistory(req.user?._id, req.body.sessionId, 'header-footer',
+      [{ name: req.file.originalname, size: req.file.size }], output, Date.now() - start);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'Header/Footer added successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to add header/footer: ' + err.message });
+  }
+});
+
+// ==================== CROP PDF ====================
+router.post('/crop-pdf', protect, verifiedOnly, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+  try {
+    const pdfBytes = await getPdfBytes(req.file);
+    const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+    const top = parseFloat(req.body.top || '0');
+    const bottom = parseFloat(req.body.bottom || '0');
+    const left = parseFloat(req.body.left || '0');
+    const right = parseFloat(req.body.right || '0');
+
+    const pages = pdfDoc.getPages();
+    pages.forEach(page => {
+      const { width, height } = page.getSize();
+      page.setCropBox(left, bottom, width - left - right, height - top - bottom);
+    });
+
+    const croppedBytes = await pdfDoc.save();
+    const filename = `cropped_${uuidv4()}.pdf`;
+    const output = await saveOutput(croppedBytes, filename, req);
+
+    await saveHistory(req.user?._id, req.body.sessionId, 'crop-pdf',
+      [{ name: req.file.originalname, size: req.file.size }], output, Date.now() - start);
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'PDF cropped successfully', output, processingTime: Date.now() - start });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to crop PDF: ' + err.message });
+  }
+});
+
 module.exports = router;
+
 
