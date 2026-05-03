@@ -1,14 +1,32 @@
-const nodemailer = require('nodemailer');
+let nodemailer;
+try {
+  nodemailer = require('nodemailer');
+} catch (e) {
+  console.warn('⚠️  nodemailer not installed - OTP emails will be logged to console only');
+}
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, // Gmail App Password
-  },
-});
+const createTransporter = () => {
+  if (!nodemailer) return null;
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) return null;
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+};
 
 const sendOTPEmail = async (email, otp, name) => {
+  // Always log OTP to console as fallback (useful for dev/testing)
+  console.log(`📧 OTP for ${email}: ${otp}`);
+
+  const transporter = createTransporter();
+  if (!transporter) {
+    console.warn('⚠️  Email not configured - OTP logged to console only');
+    return;
+  }
+
   const mailOptions = {
     from: `"PDFtoolkit" <${process.env.EMAIL_USER}>`,
     to: email,
