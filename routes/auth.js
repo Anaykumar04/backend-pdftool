@@ -19,6 +19,7 @@ const ADMIN_EMAILS = [
   'admin@pdftoolkit.com',
   'aa4345915@gmail.com'
 ];
+];
 
 const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
