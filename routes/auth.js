@@ -6,7 +6,12 @@ const { protect } = require('../middleware/auth');
 const { OAuth2Client } = require('google-auth-library');
 const { sendOTPEmail } = require('../utils/email');
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+// Initialize lazily so env vars are loaded first
+let _client = null;
+const getClient = () => {
+  if (!_client) _client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+  return _client;
+};
 
 const ADMIN_EMAILS = [
   'anayk0699@gmail.com',
@@ -232,7 +237,7 @@ router.post('/google', async (req, res) => {
       return res.status(500).json({ error: 'Google login is not configured on the server. Please contact support.' });
     }
 
-    const ticket = await client.verifyIdToken({
+    const ticket = await getClient().verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
