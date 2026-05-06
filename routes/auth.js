@@ -15,10 +15,7 @@ const getClient = () => {
 
 const ADMIN_EMAILS = [
   'anayk0699@gmail.com',
-  'anay_kumar@gmail.com',
-  'admin@pdftoolkit.com',
   'aa4345915@gmail.com'
-];
 ];
 
 const generateToken = (id) => jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '7d' });
