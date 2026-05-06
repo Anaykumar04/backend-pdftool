@@ -228,6 +228,10 @@ router.post('/google', async (req, res) => {
     const { token } = req.body;
     if (!token) return res.status(400).json({ error: 'Token is required' });
 
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ error: 'Google login is not configured on the server. Please contact support.' });
+    }
+
     const ticket = await client.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
@@ -242,16 +246,14 @@ router.post('/google', async (req, res) => {
         email,
         avatar: picture,
         role,
-        isVerified: true, // Google accounts are always verified
+        isVerified: true,
         password: Math.random().toString(36).slice(-12),
       });
     } else {
-      // Update avatar if changed
-      if (picture && !user.avatar) {
-        user.avatar = picture;
-        user.isVerified = true;
-        await user.save();
-      }
+      // Always update avatar and ensure verified
+      if (picture) user.avatar = picture;
+      user.isVerified = true;
+      await user.save();
     }
 
     res.json({
@@ -269,8 +271,15 @@ router.post('/google', async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('Google Auth Error:', err);
-    res.status(400).json({ error: 'Google authentication failed' });
+    console.error('Google Auth Error:', err.message);
+    // Give a more specific error message
+    if (err.message?.includes('Token used too late') || err.message?.includes('expired')) {
+      return res.status(400).json({ error: 'Google token expired. Please try signing in again.' });
+    }
+    if (err.message?.includes('Invalid token') || err.message?.includes('audience')) {
+      return res.status(400).json({ error: 'Invalid Google token. Make sure GOOGLE_CLIENT_ID is set correctly on the server.' });
+    }
+    res.status(400).json({ error: 'Google authentication failed: ' + err.message });
   }
 });
 
