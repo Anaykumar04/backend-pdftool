@@ -786,27 +786,53 @@ router.post('/csv-to-pdf', optionalAuth, upload.single('file'), async (req, res)
     const pdfDoc = await PDFDocument.create();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-    
-    const lines = csvData.split('\n');
-    let page = pdfDoc.addPage();
-    let { height } = page.getSize();
-    let y = height - 50;
 
-    for (let i = 0; i < lines.length; i++) {
-      if (y < 50) {
+    // Sanitize text for WinAnsi encoding
+    const sanitize = (str) => str
+      .replace(/[^\x00-\xFF]/g, '?')
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/\u2013/g, '-').replace(/\u2014/g, '--');
+
+    const lines = csvData.split('\n');
+    // Limit to first 2000 rows for large files
+    const maxLines = Math.min(lines.length, 2000);
+    let page = pdfDoc.addPage();
+    const { width, height } = page.getSize();
+    let y = height - 40;
+    const colWidth = (width - 60) / 5; // up to 5 columns
+
+    for (let i = 0; i < maxLines; i++) {
+      if (!lines[i].trim()) continue;
+      if (y < 40) {
         page = pdfDoc.addPage();
-        y = height - 50;
+        y = height - 40;
       }
       const fontToUse = i === 0 ? boldFont : font;
-      page.drawText(lines[i].substring(0, 110), { x: 50, y, size: 10, font: fontToUse });
-      y -= 15;
+      const cols = lines[i].split(',');
+      let x = 30;
+      for (let c = 0; c < Math.min(cols.length, 5); c++) {
+        const cellText = sanitize(cols[c].trim()).substring(0, 20);
+        try { page.drawText(cellText, { x, y, size: 8, font: fontToUse }); } catch {}
+        x += colWidth;
+      }
+      // If more than 5 cols, show remaining as truncated
+      if (cols.length > 5) {
+        try { page.drawText(`+${cols.length - 5} more`, { x: x - colWidth + 5, y, size: 7, font, color: rgb(0.5, 0.5, 0.5) }); } catch {}
+      }
+      y -= 14;
+    }
+
+    if (lines.length > 2000) {
+      if (y < 40) { page = pdfDoc.addPage(); y = height - 40; }
+      try { page.drawText(`... ${lines.length - 2000} more rows not shown (file too large)`, { x: 30, y, size: 8, font, color: rgb(0.5, 0.5, 0.5) }); } catch {}
     }
 
     const pdfBytes = await pdfDoc.save();
     const filename = `csv_to_pdf_${uuidv4()}.pdf`;
     const output = await saveOutput(pdfBytes, filename, req);
     cleanup([req.file.path], 0);
-    res.json({ success: true, message: 'CSV converted to PDF successfully', output, processingTime: Date.now() - start });
+    res.json({ success: true, message: `CSV converted to PDF (${Math.min(lines.length, 2000)} rows)`, output, processingTime: Date.now() - start });
   } catch (err) {
     res.status(500).json({ error: 'Failed to convert CSV: ' + err.message });
   }

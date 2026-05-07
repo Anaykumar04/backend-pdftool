@@ -18,19 +18,8 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    'application/pdf',
-    'image/jpeg',
-    'image/jpg',
-    'image/png',
-    'image/webp',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-  ];
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error(`File type ${file.mimetype} not supported`), false);
-  }
+  // Allow all file types — validation is done in each route
+  cb(null, true);
 };
 
 const upload = multer({
@@ -40,3 +29,4 @@ const upload = multer({
 });
 
 module.exports = upload;
+
