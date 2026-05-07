@@ -60,6 +60,27 @@ async function getPdfBytes(file) {
     const fontSize = 11;
     const margin = 50;
     const lineHeight = fontSize * 1.4;
+
+    // Sanitize text — replace characters outside WinAnsi range with safe equivalents
+    const sanitize = (str) => str
+      .replace(/[\u2018\u2019]/g, "'")   // smart single quotes
+      .replace(/[\u201C\u201D]/g, '"')   // smart double quotes
+      .replace(/\u2013/g, '-')           // en dash
+      .replace(/\u2014/g, '--')          // em dash
+      .replace(/\u2026/g, '...')         // ellipsis
+      .replace(/\u2022/g, '*')           // bullet
+      .replace(/\u2265/g, '>=')          // >=
+      .replace(/\u2264/g, '<=')          // <=
+      .replace(/\u2260/g, '!=')          // !=
+      .replace(/\u00D7/g, 'x')           // multiplication sign
+      .replace(/\u00F7/g, '/')           // division sign
+      .replace(/\u00B0/g, ' deg')        // degree sign
+      .replace(/\u00B1/g, '+/-')         // plus-minus
+      .replace(/\u2192/g, '->')          // right arrow
+      .replace(/\u2190/g, '<-')          // left arrow
+      .replace(/\u03B1/g, 'alpha')       // greek alpha
+      .replace(/\u03B2/g, 'beta')        // greek beta
+      .replace(/[^\x00-\xFF]/g, '?')     // any remaining non-latin1 chars
     
     let page = pdfDoc.addPage();
     let { width, height } = page.getSize();
@@ -75,19 +96,20 @@ async function getPdfBytes(file) {
         continue;
       }
       
-      const words = para.split(/\s+/);
+      const words = sanitize(para).split(/\s+/);
       let currentLine = '';
       
       for (const word of words) {
         const testLine = currentLine ? `${currentLine} ${word}` : word;
-        const lineWidth = font.widthOfTextAtSize(testLine, fontSize);
+        let lineWidth = 0;
+        try { lineWidth = font.widthOfTextAtSize(testLine, fontSize); } catch { lineWidth = maxWidth + 1; }
         
         if (lineWidth > maxWidth) {
           if (y < margin + lineHeight) {
             page = pdfDoc.addPage();
             y = height - margin;
           }
-          page.drawText(currentLine, { x: margin, y, size: fontSize, font });
+          try { page.drawText(currentLine, { x: margin, y, size: fontSize, font }); } catch {}
           y -= lineHeight;
           currentLine = word;
         } else {
@@ -100,7 +122,7 @@ async function getPdfBytes(file) {
           page = pdfDoc.addPage();
           y = height - margin;
         }
-        page.drawText(currentLine, { x: margin, y, size: fontSize, font });
+        try { page.drawText(currentLine, { x: margin, y, size: fontSize, font }); } catch {}
         y -= lineHeight;
       }
       
