@@ -1516,6 +1516,67 @@ router.post('/crop-pdf', optionalAuth, upload.single('file'), async (req, res) =
   }
 });
 
+// ==================== PDF TO WORD ====================
+router.post('/pdf-to-word', optionalAuth, upload.single('file'), async (req, res) => {
+  const start = Date.now();
+  if (!req.file) return res.status(400).json({ error: 'Please upload a PDF file' });
+
+  const isPdf = req.file.mimetype === 'application/pdf' || req.file.originalname.toLowerCase().endsWith('.pdf');
+  if (!isPdf) {
+    cleanup([req.file.path], 0);
+    return res.status(400).json({ error: 'Please upload a valid PDF file (.pdf)' });
+  }
+
+  try {
+    const { Document, Paragraph, TextRun, PageBreak, Packer } = require('docx');
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const parsed = await pdfParse(fileBuffer);
+
+    if (!parsed.text || !parsed.text.trim()) {
+      cleanup([req.file.path], 0);
+      return res.status(400).json({ error: 'No text could be extracted from this PDF. It may be a scanned image — try the Extract Text tool instead.' });
+    }
+
+    // Split by form-feed character (page separator used by pdf-parse)
+    const pages = parsed.text.split('\f');
+    if (pages[pages.length - 1]?.trim() === '') pages.pop();
+
+    const allChildren = [];
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+      if (pageIndex > 0) {
+        allChildren.push(new Paragraph({ children: [new PageBreak()] }));
+      }
+      const lines = pages[pageIndex].split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          allChildren.push(new Paragraph({ children: [new TextRun(trimmed)] }));
+        } else {
+          allChildren.push(new Paragraph({}));
+        }
+      }
+    }
+
+    const doc = new Document({ sections: [{ children: allChildren }] });
+    const docxBuffer = await Packer.toBuffer(doc);
+
+    const filename = `pdf_to_word_${uuidv4()}.docx`;
+    const output = await saveOutput(docxBuffer, filename, req);
+    const processingTime = Date.now() - start;
+
+    await saveHistory(
+      req.user?._id, req.body.sessionId, 'pdf-to-word',
+      [{ name: req.file.originalname, size: req.file.size }],
+      output, processingTime
+    );
+    cleanup([req.file.path], 0);
+    res.json({ success: true, message: 'PDF converted to Word successfully', output, processingTime });
+  } catch (err) {
+    cleanup([req.file.path], 0);
+    res.status(500).json({ error: 'Failed to convert PDF to Word: ' + err.message });
+  }
+});
+
 module.exports = router;
 
 
