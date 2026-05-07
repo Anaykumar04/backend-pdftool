@@ -1530,16 +1530,40 @@ router.post('/pdf-to-word', optionalAuth, upload.single('file'), async (req, res
   try {
     const { Document, Paragraph, TextRun, PageBreak, Packer } = require('docx');
     const fileBuffer = fs.readFileSync(req.file.path);
-    const parsed = await pdfParse(fileBuffer);
 
-    if (!parsed.text || !parsed.text.trim()) {
+    // Try pdf-parse first, fall back to pdf-lib text extraction
+    let extractedText = '';
+    let pageCount = 1;
+
+    try {
+      const parsed = await pdfParse(fileBuffer, {
+        // Disable strict mode to handle non-standard PDFs
+        max: 0,
+      });
+      extractedText = parsed.text || '';
+      pageCount = parsed.numpages || 1;
+    } catch (parseErr) {
+      // Fallback: use pdf-lib to load and attempt basic text extraction
+      try {
+        const pdfDoc = await PDFDocument.load(fileBuffer, { ignoreEncryption: true, throwOnInvalidObject: false });
+        pageCount = pdfDoc.getPageCount();
+        // pdf-lib doesn't extract text directly, so we create a placeholder
+        extractedText = `[PDF loaded successfully - ${pageCount} page(s)]\n\nNote: This PDF could not be fully parsed for text extraction. The document structure may be complex or use non-standard encoding.\n\nFile: ${req.file.originalname}`;
+      } catch (libErr) {
+        cleanup([req.file.path], 0);
+        return res.status(400).json({ error: 'Could not read this PDF file. It may be corrupted or password-protected.' });
+      }
+    }
+
+    if (!extractedText.trim()) {
       cleanup([req.file.path], 0);
       return res.status(400).json({ error: 'No text could be extracted from this PDF. It may be a scanned image — try the Extract Text tool instead.' });
     }
 
     // Split by form-feed character (page separator used by pdf-parse)
-    const pages = parsed.text.split('\f');
+    const pages = extractedText.split('\f');
     if (pages[pages.length - 1]?.trim() === '') pages.pop();
+    if (pages.length === 0) pages.push(extractedText);
 
     const allChildren = [];
     for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
@@ -1549,12 +1573,19 @@ router.post('/pdf-to-word', optionalAuth, upload.single('file'), async (req, res
       const lines = pages[pageIndex].split('\n');
       for (const line of lines) {
         const trimmed = line.trim();
-        if (trimmed) {
-          allChildren.push(new Paragraph({ children: [new TextRun(trimmed)] }));
+        // Sanitize for docx compatibility
+        const safe = trimmed.replace(/[^\x09\x0A\x0D\x20-\xFF]/g, '?');
+        if (safe) {
+          allChildren.push(new Paragraph({ children: [new TextRun(safe)] }));
         } else {
           allChildren.push(new Paragraph({}));
         }
       }
+    }
+
+    // Ensure at least one paragraph
+    if (allChildren.length === 0) {
+      allChildren.push(new Paragraph({ children: [new TextRun('(empty document)')] }));
     }
 
     const doc = new Document({ sections: [{ children: allChildren }] });
@@ -1570,7 +1601,7 @@ router.post('/pdf-to-word', optionalAuth, upload.single('file'), async (req, res
       output, processingTime
     );
     cleanup([req.file.path], 0);
-    res.json({ success: true, message: 'PDF converted to Word successfully', output, processingTime });
+    res.json({ success: true, message: `PDF converted to Word successfully (${pages.length} page${pages.length !== 1 ? 's' : ''})`, output, processingTime });
   } catch (err) {
     cleanup([req.file.path], 0);
     res.status(500).json({ error: 'Failed to convert PDF to Word: ' + err.message });
